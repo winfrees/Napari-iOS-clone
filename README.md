@@ -33,16 +33,22 @@ Early scaffold. Working so far:
 - **Files:** grayscale TIFF stacks (uncompressed or PackBits; 8/16/32-bit integer or float;
   ImageJ hyperstack and tifffile shape metadata). Labels export as TIFFs that
   `tifffile`/napari read back with the original shape.
+- **OME-Zarr:** open a `.zarr` folder from Files or an HTTP(S) URL (such as the IDR's
+  public images). Supports Zarr v2 and unsharded v3, OME-NGFF 0.1–0.5 and bioformats2raw
+  layouts. Chunks may be uncompressed or zlib, gzip, zstd, LZ4 or Blosc (LZ4, zlib, zstd)
+  compressed. The highest-resolution pyramid level under 64 million voxels is loaded, and
+  channels become additive layers using the file's colors and contrast windows.
 - **Sample data:** a synthetic blobs volume.
 
-Not yet: labels, points and shapes in 3D, voxel scale (anisotropic z), editing shape vertices, OME-Zarr, compressed or RGB TIFFs,
+Not yet: labels, points and shapes in 3D, voxel scale (anisotropic z), editing shape vertices,
+lazy (chunk-on-demand) and sharded Zarr, Blosc's blosclz codec, compressed or RGB TIFFs,
 layer scale/translate, multiscale or tiled display of very large planes, and Python scripting.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `NapariCore/` | Swift package with the model: `NDArray`, `Viewer`, `Dims`, `Camera`, `ImageLayer`, `LabelsLayer`, `PointsLayer`, `ShapesLayer` (with triangulation and hit testing), `Colormap`, TIFF reading and writing. No UI code, unit-tested with `swift test`. |
+| `NapariCore/` | Swift package with the model: `NDArray`, `Viewer`, `Dims`, `Camera`, `ImageLayer`, `LabelsLayer`, `PointsLayer`, `ShapesLayer` (with triangulation and hit testing), `Colormap`, TIFF reading and writing, Zarr/OME-Zarr reading. No UI code, unit-tested with `swift test`. |
 | `NapariApp/Sources/` | The iPad app: SwiftUI views, the Metal renderer and shaders, and canvas input handling. |
 | `project.yml` | [XcodeGen](https://github.com/yonaskolb/XcodeGen) spec for the Xcode project. The generated `.xcodeproj` is not committed. |
 | `.github/workflows/ci.yml` | Runs the core tests and builds the app for the iOS Simulator on macOS. |

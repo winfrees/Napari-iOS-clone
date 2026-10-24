@@ -11,9 +11,14 @@ final class AppModel {
         case labels
         case points
         case shapes
+        case zarr
 
         var contentTypes: [UTType] {
-            self == .points || self == .shapes ? [.commaSeparatedText] : [.tiff]
+            switch self {
+            case .image, .labels: return [.tiff]
+            case .points, .shapes: return [.commaSeparatedText]
+            case .zarr: return [.folder]
+            }
         }
     }
 
@@ -28,6 +33,8 @@ final class AppModel {
     var isLoading = false
 
     var importTarget: ImportTarget?
+    var isShowingURLPrompt = false
+    var urlText = ""
     var exportDocument: ExportDocument?
 
     func loadSampleBlobs() {
@@ -57,6 +64,12 @@ final class AppModel {
             for url in urls { openCSV(url, as: target) }
             return
         }
+        if target == .zarr {
+            for url in urls {
+                openZarr(DirectoryStore(root: url), name: url.deletingPathExtension().lastPathComponent, scopedURL: url)
+            }
+            return
+        }
         isLoading = true
         Task { @MainActor [self] in
             for url in urls {
@@ -78,6 +91,61 @@ final class AppModel {
                 }
             }
             isLoading = false
+        }
+    }
+
+    func openZarrURL() {
+        let text = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: text), url.scheme == "https" || url.scheme == "http" else {
+            errorMessage = "Enter an http:// or https:// URL of an OME-Zarr image."
+            return
+        }
+        openZarr(HTTPStore(root: url), name: url.deletingPathExtension().lastPathComponent)
+    }
+
+    /// Loads an OME-Zarr image in the background. `scopedURL` is a folder picked in Files,
+    /// which needs security-scoped access for as long as chunks are being read.
+    func openZarr(_ store: any ZarrStore, name: String, scopedURL: URL? = nil) {
+        isLoading = true
+        Task { @MainActor [self] in
+            defer { isLoading = false }
+            do {
+                let image = try await Task.detached(priority: .userInitiated) {
+                    let accessing = scopedURL?.startAccessingSecurityScopedResource() ?? false
+                    defer { if accessing { scopedURL?.stopAccessingSecurityScopedResource() } }
+                    return try await OMEZarr.open(store)
+                }.value
+                addOMEZarr(image, name: name)
+            } catch {
+                errorMessage = "Could not open \(name): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// One additive layer per channel, colored and windowed from the file's omero metadata.
+    private func addOMEZarr(_ image: OMEZarrImage, name: String) {
+        add { viewer in
+            guard let channelAxis = image.channelAxis, channelAxis < image.data.ndim - 2 else {
+                viewer.addImage(image.data, name: name)
+                return
+            }
+            let layers = viewer.addImageChannels(image.data, channelAxis: channelAxis, name: name)
+            for (layer, channel) in zip(layers, image.channels) {
+                if let label = channel.label, !label.isEmpty {
+                    layer.props.name = label
+                }
+                if let color = channel.color {
+                    layer.colormap = Colormap.ramp(channel.label ?? "channel", color)
+                }
+                if let window = channel.window {
+                    let low = max(window.lowerBound, layer.dataRange.lowerBound)
+                    let high = min(window.upperBound, layer.dataRange.upperBound)
+                    if low < high { layer.contrastLimits = low ... high }
+                }
+            }
+        }
+        if image.level > 0 {
+            status = "Loaded resolution level \(image.level) of \(image.levelCount) to fit in memory"
         }
     }
 

@@ -20,6 +20,16 @@ struct ContentView: View {
             .navigationTitle("napari")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { canvasToolbar }
+            .alert("Open OME-Zarr URL", isPresented: $model.isShowingURLPrompt) {
+                TextField("https://…/image.zarr", text: $model.urlText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                Button("Open") { model.openZarrURL() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The address of a public OME-Zarr image, for example from the Image Data Resource.")
+            }
         }
         .fileImporter(
             isPresented: Binding(get: { model.importTarget != nil }, set: { if !$0 { model.importTarget = nil } }),
@@ -71,6 +81,9 @@ struct ContentView: View {
                 Button("Open Labels…", systemImage: "square.dashed") { model.importTarget = .labels }
                 Button("Open Points CSV…", systemImage: "circle.grid.2x2") { model.importTarget = .points }
                 Button("Open Shapes CSV…", systemImage: "pentagon") { model.importTarget = .shapes }
+                Divider()
+                Button("Open OME-Zarr Folder…", systemImage: "folder") { model.importTarget = .zarr }
+                Button("Open OME-Zarr URL…", systemImage: "network") { model.isShowingURLPrompt = true }
                 Divider()
                 Button("Sample: Blobs", systemImage: "circle.hexagongrid") { model.loadSampleBlobs() }
                 Divider()

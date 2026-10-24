@@ -1,8 +1,8 @@
 import Foundation
 
 /// An image read from an OME-Zarr (OME-NGFF) multiscale, at one resolution level.
-public struct OMEZarrImage {
-    public struct Channel: Equatable {
+public struct OMEZarrImage: Sendable {
+    public struct Channel: Equatable, Sendable {
         public var label: String?
         public var color: RGBA?
         /// The display window (contrast limits) suggested by the file.

@@ -33,17 +33,18 @@ final class ZarrTests: XCTestCase {
     }
 
     func testZlibGzipZstdAndLZ4Compressors() async throws {
-        let values = (0 ..< 24).map { UInt16($0 * 100) }
+        // Chunks of a few kilobytes: Apple's encoders decline inputs of only a few bytes.
+        let values = (0 ..< 2400).map { UInt16(($0 % 37) * 100) }
         let expected = values.map { Float($0) }
-        try writeArray(path: "zlib", shape: [4, 6], chunks: [3, 4], values: values, compressor: ["id": "zlib"]) {
+        try writeArray(path: "zlib", shape: [40, 60], chunks: [30, 40], values: values, compressor: ["id": "zlib"]) {
             [0x78, 0x9C] + self.deflate($0) + [0, 0, 0, 0]
         }
-        try writeArray(path: "gzip", shape: [4, 6], chunks: [3, 4], values: values, compressor: ["id": "gzip"]) {
+        try writeArray(path: "gzip", shape: [40, 60], chunks: [30, 40], values: values, compressor: ["id": "gzip"]) {
             [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 3] + self.deflate($0) + Array(repeating: 0, count: 8)
         }
-        try writeArray(path: "zstd", shape: [4, 6], chunks: [3, 4], values: values, compressor: ["id": "zstd"],
+        try writeArray(path: "zstd", shape: [40, 60], chunks: [30, 40], values: values, compressor: ["id": "zstd"],
                        encode: zstd)
-        try writeArray(path: "lz4", shape: [4, 6], chunks: [3, 4], values: values, compressor: ["id": "lz4"]) {
+        try writeArray(path: "lz4", shape: [40, 60], chunks: [30, 40], values: values, compressor: ["id": "lz4"]) {
             le32($0.count) + self.lz4($0)
         }
         for path in ["zlib", "gzip", "zstd", "lz4"] {
