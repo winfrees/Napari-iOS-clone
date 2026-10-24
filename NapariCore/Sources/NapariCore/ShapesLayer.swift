@@ -263,7 +263,7 @@ public final class ShapesLayer: Layer {
                   let type = field(typeColumn).flatMap(ShapeType.init(rawValue:))
             else { throw CSVError.badRow(line: row + 2) }
             let coordinates = try axisColumns.map { column -> Double in
-                guard let value = field(column).flatMap { Double($0) } else { throw CSVError.badRow(line: row + 2) }
+                guard let value = field(column).flatMap({ Double($0) }) else { throw CSVError.badRow(line: row + 2) }
                 return value
             }
             let vertex = SIMD2(coordinates[coordinates.count - 1], coordinates[coordinates.count - 2])
