@@ -1,6 +1,7 @@
 import Foundation
 import NapariCore
 import Observation
+import UniformTypeIdentifiers
 
 /// App-level state around the core `Viewer`: file import/export, status text and input settings.
 @Observable
@@ -8,6 +9,11 @@ final class AppModel {
     enum ImportTarget {
         case image
         case labels
+        case points
+
+        var contentTypes: [UTType] {
+            self == .points ? [.commaSeparatedText] : [.tiff]
+        }
     }
 
     let viewer = Viewer()
@@ -21,7 +27,7 @@ final class AppModel {
     var isLoading = false
 
     var importTarget: ImportTarget?
-    var exportDocument: TIFFDocument?
+    var exportDocument: ExportDocument?
 
     func loadSampleBlobs() {
         add { $0.addImage(SampleData.blobs(), name: "blobs") }
@@ -31,6 +37,10 @@ final class AppModel {
         viewer.addEmptyLabels()
     }
 
+    func addEmptyPoints() {
+        viewer.addEmptyPoints()
+    }
+
     func toggle3D() {
         viewer.dims.setNDisplay(viewer.dims.ndisplay == 3 ? 2 : 3)
         status = viewer.dims.ndisplay == 3 ? "3D: drag to rotate, two fingers to pan" : ""
@@ -38,6 +48,10 @@ final class AppModel {
     }
 
     func open(_ urls: [URL], as target: ImportTarget) {
+        if target == .points {
+            urls.forEach(openPoints)
+            return
+        }
         isLoading = true
         Task { @MainActor [self] in
             for url in urls {
@@ -62,9 +76,44 @@ final class AppModel {
         }
     }
 
-    func exportSelectedLabels() {
-        guard let labels = viewer.selectedLayer as? LabelsLayer else { return }
-        exportDocument = TIFFDocument(data: TIFFWriter.data(for: labels.data), filename: labels.name)
+    var canExportSelectedLayer: Bool {
+        viewer.selectedLayer is LabelsLayer || viewer.selectedLayer is PointsLayer
+    }
+
+    /// Labels export as a TIFF, points as a napari-style CSV.
+    func exportSelectedLayer() {
+        if let labels = viewer.selectedLayer as? LabelsLayer {
+            exportDocument = ExportDocument(data: TIFFWriter.data(for: labels.data), filename: labels.name,
+                                            contentType: .tiff)
+        } else if let points = viewer.selectedLayer as? PointsLayer {
+            exportDocument = ExportDocument(data: Data(points.csv().utf8), filename: points.name,
+                                            contentType: .commaSeparatedText)
+        }
+    }
+
+    private func openPoints(_ url: URL) {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let coordinates = try PointsLayer.parseCSV(String(contentsOf: url, encoding: .utf8))
+            guard let ndim = coordinates.first?.count else {
+                errorMessage = "\(url.lastPathComponent) contains no points."
+                return
+            }
+            // Span the layer being annotated when the dimensions match, else the points themselves.
+            let extent: [Int]
+            if let reference = viewer.selectedLayer ?? viewer.layers.first, reference.ndim == ndim {
+                extent = reference.shape
+            } else {
+                extent = (0 ..< ndim).map { axis in
+                    max(1, Int((coordinates.map { $0[axis] }.max() ?? 0).rounded(.up)) + 1)
+                }
+            }
+            let name = url.deletingPathExtension().lastPathComponent
+            add { $0.add(PointsLayer(extent: extent, points: coordinates, name: name)) }
+        } catch {
+            errorMessage = "Could not open \(url.lastPathComponent): \(error.localizedDescription)"
+        }
     }
 
     func updateStatus(at point: SIMD2<Double>) {

@@ -16,14 +16,27 @@ struct CanvasView: UIViewRepresentable {
 /// Handles input on the canvas:
 /// - one finger (or a trackpad) pans, pinch zooms, scrolling zooms;
 /// - in 3D, one finger orbits and two fingers pan;
-/// - with a labels layer in a painting mode, the Pencil (and fingers, unless "Pencil only"
-///   is on) paints, fills or picks, and panning takes two fingers;
+/// - with a labels layer in a painting mode, or a points layer in add or select mode, the
+///   Pencil (and fingers, unless "Pencil only" is on) edits, and panning takes two fingers;
 /// - double-tapping the Pencil switches between paint and erase.
 final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     private let model: AppModel
     private var renderer: Renderer?
     private var panGesture: UIPanGestureRecognizer!
-    private var strokeTouch: UITouch?
+    /// The touch currently editing, and what it is doing.
+    private var activeTouch: UITouch?
+    private var drag: Drag?
+
+    private enum Editor {
+        case labels(LabelsLayer)
+        case points(PointsLayer)
+    }
+
+    private enum Drag {
+        case stroke(LabelsLayer)
+        /// `added` is true when this touch created the point, so a cancelled touch removes it.
+        case point(PointsLayer, index: Int, added: Bool)
+    }
 
     init(model: AppModel) {
         self.model = model
@@ -75,17 +88,22 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
         model.viewer.camera.dataPoint(fromScreen: SIMD2(Double(location.x), Double(location.y)), viewSize: viewSize)
     }
 
-    /// The labels layer that touches edit, if any.
-    private var paintingLayer: LabelsLayer? {
+    /// The layer that touches edit, if any: the selected layer, when it is in an editing mode.
+    private var editor: Editor? {
         guard model.viewer.dims.ndisplay == 2,
-              let labels = model.viewer.selectedLayer as? LabelsLayer,
-              labels.mode != .panZoom, labels.props.visible
+              let layer = model.viewer.selectedLayer, layer.props.visible
         else { return nil }
-        return labels
+        if let labels = layer as? LabelsLayer, labels.mode != .panZoom {
+            return .labels(labels)
+        }
+        if let points = layer as? PointsLayer, points.mode != .panZoom {
+            return .points(points)
+        }
+        return nil
     }
 
-    private func touchPaints(_ touch: UITouch) -> Bool {
-        guard paintingLayer != nil else { return false }
+    private func touchEdits(_ touch: UITouch) -> Bool {
+        guard editor != nil else { return false }
         return touch.type == .pencil || !model.pencilOnly
     }
 
@@ -93,8 +111,8 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
 
     func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         if gesture === panGesture {
-            // While fingers paint, panning needs a second finger.
-            panGesture.minimumNumberOfTouches = paintingLayer != nil && !model.pencilOnly ? 2 : 1
+            // While fingers edit, panning needs a second finger.
+            panGesture.minimumNumberOfTouches = editor != nil && !model.pencilOnly ? 2 : 1
         }
         return true
     }
@@ -149,52 +167,94 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
         labels.mode = labels.mode == .erase ? .paint : .erase
     }
 
-    // MARK: Painting
+    // MARK: Editing
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        guard strokeTouch == nil, let labels = paintingLayer,
-              let touch = touches.first(where: touchPaints)
-        else { return }
+        guard activeTouch == nil, let editor, let touch = touches.first(where: touchEdits) else { return }
         let point = dataPoint(touch.preciseLocation(in: self))
-        let plane = model.viewer.dims.planeIndices(forLayerShape: labels.shape)
         model.updateStatus(at: point)
-        switch labels.mode {
-        case .paint, .erase:
-            strokeTouch = touch
-            labels.stroke(to: point, plane: plane)
-        case .fill:
-            labels.fill(at: point, plane: plane)
-        case .pick:
-            labels.pick(at: point, plane: plane)
-        case .panZoom:
-            break
+        switch editor {
+        case .labels(let labels):
+            let plane = model.viewer.dims.planeIndices(forLayerShape: labels.shape)
+            switch labels.mode {
+            case .paint, .erase:
+                activeTouch = touch
+                drag = .stroke(labels)
+                labels.stroke(to: point, plane: plane)
+            case .fill:
+                labels.fill(at: point, plane: plane)
+            case .pick:
+                labels.pick(at: point, plane: plane)
+            case .panZoom:
+                break
+            }
+        case .points(let points):
+            let plane = model.viewer.dims.planeIndices(forLayerShape: points.shape)
+            switch points.mode {
+            case .add:
+                let index = points.add(plane.map { Double($0) } + [point.y, point.x])
+                points.selection = [index]
+                activeTouch = touch
+                drag = .point(points, index: index, added: true)
+            case .select:
+                // At least 12 points on screen, so small points stay easy to hit.
+                let radius = max(points.size / 2, 12 / model.viewer.camera.zoom)
+                if let index = points.nearestVisible(to: point, plane: plane, within: radius) {
+                    points.selection = [index]
+                    activeTouch = touch
+                    drag = .point(points, index: index, added: false)
+                } else {
+                    points.selection = []
+                }
+            case .panZoom:
+                break
+            }
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
-        guard let touch = strokeTouch, touches.contains(touch), let labels = paintingLayer else { return }
-        let plane = model.viewer.dims.planeIndices(forLayerShape: labels.shape)
-        // Coalesced touches give the Pencil's full 240 Hz sample rate.
-        for sample in event?.coalescedTouches(for: touch) ?? [touch] {
-            labels.stroke(to: dataPoint(sample.preciseLocation(in: self)), plane: plane)
+        guard let touch = activeTouch, touches.contains(touch), let drag else { return }
+        let location = dataPoint(touch.preciseLocation(in: self))
+        model.updateStatus(at: location)
+        switch drag {
+        case .stroke(let labels):
+            let plane = model.viewer.dims.planeIndices(forLayerShape: labels.shape)
+            // Coalesced touches give the Pencil's full 240 Hz sample rate.
+            for sample in event?.coalescedTouches(for: touch) ?? [touch] {
+                labels.stroke(to: dataPoint(sample.preciseLocation(in: self)), plane: plane)
+            }
+        case .point(let points, let index, _):
+            let plane = model.viewer.dims.planeIndices(forLayerShape: points.shape)
+            points.move(index, to: plane.map { Double($0) } + [location.y, location.x])
         }
-        model.updateStatus(at: dataPoint(touch.preciseLocation(in: self)))
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
-        guard let touch = strokeTouch, touches.contains(touch) else { return }
-        strokeTouch = nil
-        (model.viewer.selectedLayer as? LabelsLayer)?.endStroke()
+        guard let touch = activeTouch, touches.contains(touch) else { return }
+        if let drag, case .stroke(let labels) = drag {
+            labels.endStroke()
+        }
+        activeTouch = nil
+        drag = nil
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
-        guard let touch = strokeTouch, touches.contains(touch) else { return }
-        strokeTouch = nil
-        // Typically a second finger arrived and this is a pan, not a stroke.
-        (model.viewer.selectedLayer as? LabelsLayer)?.cancelStroke()
+        guard let touch = activeTouch, touches.contains(touch), let drag else { return }
+        // Typically a second finger arrived and this is a pan, so undo what the first finger did.
+        switch drag {
+        case .stroke(let labels):
+            labels.cancelStroke()
+        case .point(let points, let index, let added) where added:
+            points.selection = [index]
+            points.removeSelected()
+        case .point:
+            break
+        }
+        activeTouch = nil
+        self.drag = nil
     }
 }

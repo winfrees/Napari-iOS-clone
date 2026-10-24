@@ -20,7 +20,7 @@ struct LayerSidebar: View {
             }
             Section("Layers") {
                 ForEach(displayedLayers, id: \.id) { layer in
-                    LayerRow(props: layer.props, kind: layer is LabelsLayer ? .labels : .image)
+                    LayerRow(props: layer.props, kind: LayerRow.Kind(layer))
                         .tag(layer.id)
                 }
                 .onMove { source, destination in
@@ -42,6 +42,23 @@ struct LayerRow: View {
     enum Kind {
         case image
         case labels
+        case points
+
+        init(_ layer: any Layer) {
+            switch layer {
+            case is LabelsLayer: self = .labels
+            case is PointsLayer: self = .points
+            default: self = .image
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .image: return "photo"
+            case .labels: return "square.dashed.inset.filled"
+            case .points: return "circle.grid.2x2"
+            }
+        }
     }
 
     @Bindable var props: LayerProperties
@@ -56,7 +73,7 @@ struct LayerRow: View {
                     .foregroundStyle(props.visible ? .primary : .secondary)
             }
             .buttonStyle(.borderless)
-            Image(systemName: kind == .labels ? "square.dashed.inset.filled" : "photo")
+            Image(systemName: kind.symbol)
                 .foregroundStyle(.secondary)
             TextField("Name", text: $props.name)
         }
@@ -73,6 +90,8 @@ struct LayerControls: View {
             ImageControls(layer: image)
         } else if let labels = layer as? LabelsLayer {
             LabelsControls(layer: labels, model: model)
+        } else if let points = layer as? PointsLayer {
+            PointsControls(layer: points, model: model)
         }
     }
 }
@@ -162,6 +181,58 @@ struct ColormapBar: View {
         )
         .frame(height: 12)
         .clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+struct PointsControls: View {
+    @Bindable var layer: PointsLayer
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Picker("Mode", selection: $layer.mode) {
+            ForEach(PointsMode.allCases) { mode in
+                Image(systemName: Self.symbol(for: mode))
+                    .accessibilityLabel(mode.rawValue)
+                    .tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        LabeledContent("Point size") {
+            HStack {
+                Slider(value: $layer.size, in: 1 ... 100)
+                Text("\(Int(layer.size))")
+                    .monospacedDigit()
+                    .frame(width: 32, alignment: .trailing)
+            }
+        }
+        ColorPicker("Face color", selection: color(\.faceColor))
+        ColorPicker("Border color", selection: color(\.borderColor))
+        LabeledContent("Points", value: "\(layer.points.count)")
+        Toggle("Edit with Apple Pencil only", isOn: $model.pencilOnly)
+        Button("Delete selected", systemImage: "trash", role: .destructive, action: layer.removeSelected)
+            .disabled(layer.selection.isEmpty)
+            .buttonStyle(.borderless)
+    }
+
+    private func color(_ keyPath: ReferenceWritableKeyPath<PointsLayer, RGBA>) -> Binding<Color> {
+        Binding(
+            get: {
+                let c = layer[keyPath: keyPath]
+                return Color(red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
+            },
+            set: { newValue in
+                let resolved = newValue.resolve(in: EnvironmentValues())
+                layer[keyPath: keyPath] = RGBA(resolved.red, resolved.green, resolved.blue, resolved.opacity)
+            }
+        )
+    }
+
+    static func symbol(for mode: PointsMode) -> String {
+        switch mode {
+        case .panZoom: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .add: return "plus.circle"
+        case .select: return "cursorarrow"
+        }
     }
 }
 

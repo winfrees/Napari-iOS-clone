@@ -23,7 +23,7 @@ struct ContentView: View {
         }
         .fileImporter(
             isPresented: Binding(get: { model.importTarget != nil }, set: { if !$0 { model.importTarget = nil } }),
-            allowedContentTypes: [.tiff],
+            allowedContentTypes: model.importTarget?.contentTypes ?? [.tiff],
             allowsMultipleSelection: true
         ) { result in
             let target = model.importTarget ?? .image
@@ -36,7 +36,7 @@ struct ContentView: View {
         .fileExporter(
             isPresented: Binding(get: { model.exportDocument != nil }, set: { if !$0 { model.exportDocument = nil } }),
             document: model.exportDocument,
-            contentType: .tiff,
+            contentType: model.exportDocument?.contentType ?? .tiff,
             defaultFilename: model.exportDocument?.filename
         ) { result in
             if case .failure(let error) = result { model.errorMessage = error.localizedDescription }
@@ -69,18 +69,24 @@ struct ContentView: View {
             Menu {
                 Button("Open Image…", systemImage: "photo") { model.importTarget = .image }
                 Button("Open Labels…", systemImage: "square.dashed") { model.importTarget = .labels }
+                Button("Open Points CSV…", systemImage: "circle.grid.2x2") { model.importTarget = .points }
                 Divider()
                 Button("Sample: Blobs", systemImage: "circle.hexagongrid") { model.loadSampleBlobs() }
                 Divider()
-                Button("Export Labels…", systemImage: "square.and.arrow.up") { model.exportSelectedLabels() }
-                    .disabled(!(model.viewer.selectedLayer is LabelsLayer))
+                Button("Export Layer…", systemImage: "square.and.arrow.up") { model.exportSelectedLayer() }
+                    .disabled(!model.canExportSelectedLayer)
             } label: {
                 Label("File", systemImage: "folder")
             }
         }
         ToolbarItem {
-            Button("New Labels Layer", systemImage: "plus.square.dashed") { model.addEmptyLabels() }
-                .disabled(model.viewer.layers.isEmpty)
+            Menu {
+                Button("New Labels Layer", systemImage: "square.dashed") { model.addEmptyLabels() }
+                Button("New Points Layer", systemImage: "circle.grid.2x2") { model.addEmptyPoints() }
+            } label: {
+                Label("New Layer", systemImage: "plus.square.on.square")
+            }
+            .disabled(model.viewer.layers.isEmpty)
         }
     }
 

@@ -18,6 +18,9 @@ Early scaffold. Working so far:
 - **Labels:** paint, erase, flood fill and pick with Apple Pencil or finger, with undo and
   redo. Double-tap the Pencil to switch between paint and erase. Turn on "Paint with Apple
   Pencil only" to keep fingers for panning.
+- **Points:** add points with a tap or the Pencil, select and drag them, delete the
+  selection; size and colors are adjustable. Import and export use napari's points CSV
+  format (`index,axis-0,axis-1,…`), so files move both ways.
 - **3D:** volumes ray-cast on the GPU with maximum (MIP), minimum or average intensity
   projection, using the layer's colormap and contrast. Drag to rotate, two fingers to pan,
   pinch to zoom. Extra axes such as time keep their sliders.
@@ -28,14 +31,14 @@ Early scaffold. Working so far:
   `tifffile`/napari read back with the original shape.
 - **Sample data:** a synthetic blobs volume.
 
-Not yet: labels in 3D, voxel scale (anisotropic z), Points and Shapes layers, OME-Zarr, compressed or RGB TIFFs,
+Not yet: labels and points in 3D, voxel scale (anisotropic z), Shapes layers, OME-Zarr, compressed or RGB TIFFs,
 layer scale/translate, multiscale or tiled display of very large planes, and Python scripting.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `NapariCore/` | Swift package with the model: `NDArray`, `Viewer`, `Dims`, `Camera`, `ImageLayer`, `LabelsLayer`, `Colormap`, TIFF reading and writing. No UI code, unit-tested with `swift test`. |
+| `NapariCore/` | Swift package with the model: `NDArray`, `Viewer`, `Dims`, `Camera`, `ImageLayer`, `LabelsLayer`, `PointsLayer`, `Colormap`, TIFF reading and writing. No UI code, unit-tested with `swift test`. |
 | `NapariApp/Sources/` | The iPad app: SwiftUI views, the Metal renderer and shaders, and canvas input handling. |
 | `project.yml` | [XcodeGen](https://github.com/yonaskolb/XcodeGen) spec for the Xcode project. The generated `.xcodeproj` is not committed. |
 | `.github/workflows/ci.yml` | Runs the core tests and builds the app for the iOS Simulator on macOS. |
@@ -48,6 +51,7 @@ How it maps to napari:
 | `viewer.dims` | `Dims`; `DimsSliders` view |
 | `Image` layer | `ImageLayer`; `image_fragment` shader |
 | `Labels` layer | `LabelsLayer`; `labels_fragment` shader |
+| `Points` layer | `PointsLayer`; instanced `points_vertex`/`points_fragment` shaders |
 | `add_image(..., channel_axis=)` | `Viewer.addImageChannels(_:channelAxis:)` |
 | vispy canvas | `CanvasMTKView` + `Renderer` (Metal) |
 | layer list and layer controls | `LayerSidebar` |

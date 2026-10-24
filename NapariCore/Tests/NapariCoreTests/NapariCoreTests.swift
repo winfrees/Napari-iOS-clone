@@ -216,6 +216,51 @@ final class LabelsLayerTests: XCTestCase {
     }
 }
 
+final class PointsLayerTests: XCTestCase {
+    func testSlicingAndHitTesting() {
+        let points = PointsLayer(extent: [10, 50, 50], points: [[2, 10, 10], [2.4, 30, 30], [5, 10, 10]], name: "Points")
+        XCTAssertEqual(points.visibleIndices(plane: [2]), [0, 1])
+        XCTAssertEqual(points.visibleIndices(plane: [5]), [2])
+        // (x, y) = (11, 12) is near point 0, which is visible on plane 2 only.
+        XCTAssertEqual(points.nearestVisible(to: SIMD2(11, 12), plane: [2], within: 5), 0)
+        XCTAssertNil(points.nearestVisible(to: SIMD2(11, 12), plane: [2], within: 1))
+        XCTAssertEqual(points.nearestVisible(to: SIMD2(11, 12), plane: [5], within: 5), 2)
+    }
+
+    func testEditing() {
+        let points = PointsLayer(extent: [50, 50], name: "Points")
+        let a = points.add([1, 2])
+        let b = points.add([3, 4])
+        points.add([5, 6])
+        points.move(b, to: [7, 8])
+        XCTAssertEqual(points.points[b], [7, 8])
+        points.selection = [a, b]
+        points.removeSelected()
+        XCTAssertEqual(points.points, [[5, 6]])
+        XCTAssertTrue(points.selection.isEmpty)
+    }
+
+    func testCSVRoundTrip() throws {
+        let points = PointsLayer(extent: [10, 50, 50], points: [[2, 10.5, 10], [3, 30, 30.25]], name: "Points")
+        let csv = points.csv()
+        XCTAssertTrue(csv.hasPrefix("index,axis-0,axis-1,axis-2\n0,2.0,10.5,10.0\n"))
+        XCTAssertEqual(try PointsLayer.parseCSV(csv), points.points)
+        // Extra columns and column order from other tools are tolerated.
+        XCTAssertEqual(try PointsLayer.parseCSV("axis-1,label,axis-0\n4,cell,3\n"), [[3, 4]])
+        XCTAssertThrowsError(try PointsLayer.parseCSV("index,axis-0,axis-1\n0,1,x\n")) { error in
+            XCTAssertEqual(error as? PointsLayer.CSVError, .badValue(line: 2))
+        }
+    }
+
+    func testEmptyPointsMatchSelectedLayer() {
+        let viewer = Viewer()
+        viewer.addImage(NDArray(shape: [3, 8, 8], repeating: 0))
+        let points = viewer.addEmptyPoints()
+        XCTAssertEqual(points?.shape, [3, 8, 8])
+        XCTAssertEqual(viewer.dims.range, [3, 8, 8])
+    }
+}
+
 final class TIFFTests: XCTestCase {
     func testRoundTripUInt32Labels() throws {
         let original = NDArray<UInt32>(shape: [3, 5, 7], storage: (0 ..< 105).map { UInt32($0 * 1000) })

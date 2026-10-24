@@ -90,6 +90,13 @@ public final class Viewer {
         return add(LabelsLayer(shape: reference.shape, name: name))
     }
 
+    /// Adds an empty points layer spanning the selected (or first) layer.
+    @discardableResult
+    public func addEmptyPoints(name: String = "Points") -> PointsLayer? {
+        guard let reference = selectedLayer ?? layers.first else { return nil }
+        return add(PointsLayer(extent: reference.shape, name: name))
+    }
+
     public func removeLayer(id: UUID) {
         guard let index = layers.firstIndex(where: { $0.id == id }) else { return }
         layers.remove(at: index)

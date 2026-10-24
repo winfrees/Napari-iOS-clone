@@ -14,6 +14,19 @@ struct LayerUniforms {
     var opacity: Float = 1
 }
 
+/// Must match `PointInstance` in Shaders.metal.
+struct PointInstance {
+    var center: SIMD2<Float>
+    var size: Float
+    var borderWidth: Float
+    var face: SIMD4<Float>
+    var border: SIMD4<Float>
+}
+
+extension RGBA {
+    var vector: SIMD4<Float> { SIMD4(r, g, b, a) }
+}
+
 /// Must match `VolumeUniforms` in Shaders.metal.
 struct VolumeUniforms {
     var cameraToWorld: simd_float4x4
@@ -51,6 +64,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let imagePipelines: [Blending: MTLRenderPipelineState]
     private let labelsPipelines: [Blending: MTLRenderPipelineState]
     private let volumePipelines: [Blending: MTLRenderPipelineState]
+    private let pointsPipelines: [Blending: MTLRenderPipelineState]
     private let nearestSampler: MTLSamplerState
     private let linearSampler: MTLSamplerState
     private var planes: [UUID: CachedTexture] = [:]
@@ -99,7 +113,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         imagePipelines = pipelines(vertex: "quad_vertex", fragment: "image_fragment")
         labelsPipelines = pipelines(vertex: "quad_vertex", fragment: "labels_fragment")
         volumePipelines = pipelines(vertex: "fullscreen_vertex", fragment: "volume_fragment")
-        guard [imagePipelines, labelsPipelines, volumePipelines].allSatisfy({ $0.count == Blending.allCases.count })
+        pointsPipelines = pipelines(vertex: "points_vertex", fragment: "points_fragment")
+        guard [imagePipelines, labelsPipelines, volumePipelines, pointsPipelines].allSatisfy({ $0.count == Blending.allCases.count })
         else { return nil }
 
         func sampler(_ filter: MTLSamplerMinMagFilter) -> MTLSamplerState? {
@@ -192,6 +207,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 else { continue }
                 encoder.setRenderPipelineState(pipeline)
                 encoder.setFragmentTexture(plane, index: 0)
+            } else if let points = layer as? PointsLayer {
+                drawPoints(points, leading: leading, uniforms: &uniforms, encoder: encoder)
+                continue
             } else {
                 continue
             }
@@ -199,6 +217,35 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
+    }
+
+    private func drawPoints(_ points: PointsLayer, leading: [Int], uniforms: inout LayerUniforms,
+                            encoder: MTLRenderCommandEncoder) {
+        let visible = points.visibleIndices(plane: leading)
+        guard !visible.isEmpty, let pipeline = pointsPipelines[points.props.blending] else { return }
+        let selectedBorder = SIMD4<Float>(0.2, 0.8, 1, 1)
+        var instances = visible.map { index -> PointInstance in
+            let p = points.points[index]
+            let selected = points.selection.contains(index)
+            return PointInstance(
+                center: SIMD2(Float(p[p.count - 1]), Float(p[p.count - 2])),
+                size: Float(points.size),
+                borderWidth: selected ? 0.35 : 0.15,
+                face: points.faceColor.vector,
+                border: selected ? selectedBorder : points.borderColor.vector
+            )
+        }
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
+        let length = MemoryLayout<PointInstance>.stride * instances.count
+        if length <= 4096 {
+            encoder.setVertexBytes(&instances, length: length, index: 1)
+        } else {
+            guard let buffer = device.makeBuffer(bytes: &instances, length: length) else { return }
+            encoder.setVertexBuffer(buffer, offset: 0, index: 1)
+        }
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instances.count)
     }
 
     // MARK: 3D

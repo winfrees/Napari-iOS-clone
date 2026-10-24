@@ -141,3 +141,53 @@ fragment float4 volume_fragment(VertexOut in [[stage_in]],
     float alpha = color.a * u.opacity;
     return float4(color.rgb * alpha, alpha);
 }
+
+// MARK: - Points
+
+// Must match `PointInstance` in Renderer.swift.
+struct PointInstance {
+    float2 center;      // data (x, y)
+    float size;         // diameter in data pixels
+    float borderWidth;  // fraction of the radius
+    float4 face;
+    float4 border;
+};
+
+struct PointOut {
+    float4 position [[position]];
+    float2 local;       // -1...1 across the point
+    float borderWidth [[flat]];
+    float4 face [[flat]];
+    float4 border [[flat]];
+};
+
+// One quad per point instance, sized in data pixels so points scale with zoom like napari.
+vertex PointOut points_vertex(uint vid [[vertex_id]],
+                              uint iid [[instance_id]],
+                              constant LayerUniforms &u [[buffer(0)]],
+                              const device PointInstance *points [[buffer(1)]]) {
+    PointInstance p = points[iid];
+    float2 corner = float2(float(vid & 1), float(vid >> 1)) * 2.0 - 1.0;
+    float2 data = p.center + corner * 0.5 * p.size;
+    PointOut out;
+    out.position = float4(data * u.scale + u.offset, 0.0, 1.0);
+    out.local = corner;
+    out.borderWidth = p.borderWidth;
+    out.face = p.face;
+    out.border = p.border;
+    return out;
+}
+
+// A disc with a border ring, antialiased over about one screen pixel.
+fragment float4 points_fragment(PointOut in [[stage_in]], constant LayerUniforms &u [[buffer(0)]]) {
+    float r = length(in.local);
+    float aa = max(fwidth(r), 1e-4f);
+    float coverage = 1.0 - smoothstep(1.0 - aa, 1.0, r);
+    if (coverage <= 0.0) {
+        discard_fragment();
+    }
+    float inBorder = smoothstep(1.0 - in.borderWidth - aa, 1.0 - in.borderWidth, r);
+    float4 color = mix(in.face, in.border, inBorder);
+    float alpha = color.a * coverage * u.opacity;
+    return float4(color.rgb * alpha, alpha);
+}
