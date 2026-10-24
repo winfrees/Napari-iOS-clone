@@ -23,6 +23,12 @@ struct PointInstance {
     var border: SIMD4<Float>
 }
 
+/// Must match `ShapeVertex` in Shaders.metal.
+struct ShapeVertex {
+    var position: SIMD2<Float>
+    var color: SIMD4<Float>
+}
+
 extension RGBA {
     var vector: SIMD4<Float> { SIMD4(r, g, b, a) }
 }
@@ -65,6 +71,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let labelsPipelines: [Blending: MTLRenderPipelineState]
     private let volumePipelines: [Blending: MTLRenderPipelineState]
     private let pointsPipelines: [Blending: MTLRenderPipelineState]
+    private let shapesPipelines: [Blending: MTLRenderPipelineState]
     private let nearestSampler: MTLSamplerState
     private let linearSampler: MTLSamplerState
     private var planes: [UUID: CachedTexture] = [:]
@@ -87,6 +94,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 let descriptor = MTLRenderPipelineDescriptor()
                 descriptor.vertexFunction = library.makeFunction(name: vertex)
                 descriptor.fragmentFunction = library.makeFunction(name: fragment)
+                descriptor.rasterSampleCount = view.sampleCount
                 let attachment = descriptor.colorAttachments[0]!
                 attachment.pixelFormat = view.colorPixelFormat
                 // Shaders output premultiplied alpha.
@@ -114,7 +122,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         labelsPipelines = pipelines(vertex: "quad_vertex", fragment: "labels_fragment")
         volumePipelines = pipelines(vertex: "fullscreen_vertex", fragment: "volume_fragment")
         pointsPipelines = pipelines(vertex: "points_vertex", fragment: "points_fragment")
-        guard [imagePipelines, labelsPipelines, volumePipelines, pointsPipelines].allSatisfy({ $0.count == Blending.allCases.count })
+        shapesPipelines = pipelines(vertex: "shapes_vertex", fragment: "shapes_fragment")
+        guard [imagePipelines, labelsPipelines, volumePipelines, pointsPipelines, shapesPipelines].allSatisfy({ $0.count == Blending.allCases.count })
         else { return nil }
 
         func sampler(_ filter: MTLSamplerMinMagFilter) -> MTLSamplerState? {
@@ -210,6 +219,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             } else if let points = layer as? PointsLayer {
                 drawPoints(points, leading: leading, uniforms: &uniforms, encoder: encoder)
                 continue
+            } else if let shapes = layer as? ShapesLayer {
+                drawShapes(shapes, leading: leading, zoom: camera.zoom, uniforms: &uniforms, encoder: encoder)
+                continue
             } else {
                 continue
             }
@@ -246,6 +258,73 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setVertexBuffer(buffer, offset: 0, index: 1)
         }
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instances.count)
+    }
+
+    private func drawShapes(_ layer: ShapesLayer, leading: [Int], zoom: Double, uniforms: inout LayerUniforms,
+                            encoder: MTLRenderCommandEncoder) {
+        var vertices = shapeMesh(layer, leading: leading, zoom: zoom)
+        guard !vertices.isEmpty, let pipeline = shapesPipelines[layer.props.blending] else { return }
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LayerUniforms>.stride, index: 0)
+        let length = MemoryLayout<ShapeVertex>.stride * vertices.count
+        if length <= 4096 {
+            encoder.setVertexBytes(&vertices, length: length, index: 1)
+        } else {
+            guard let buffer = device.makeBuffer(bytes: &vertices, length: length) else { return }
+            encoder.setVertexBuffer(buffer, offset: 0, index: 1)
+        }
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+    }
+
+    /// Triangles for the visible shapes and the draft: fills, edges as quads, and square
+    /// vertex handles on selected shapes. Widths are in data pixels, so they scale with zoom.
+    private func shapeMesh(_ layer: ShapesLayer, leading: [Int], zoom: Double) -> [ShapeVertex] {
+        var mesh: [ShapeVertex] = []
+        func triangle(_ a: SIMD2<Double>, _ b: SIMD2<Double>, _ c: SIMD2<Double>, _ color: SIMD4<Float>) {
+            for p in [a, b, c] {
+                mesh.append(ShapeVertex(position: SIMD2<Float>(p), color: color))
+            }
+        }
+        func quad(_ a: SIMD2<Double>, _ b: SIMD2<Double>, _ c: SIMD2<Double>, _ d: SIMD2<Double>, _ color: SIMD4<Float>) {
+            triangle(a, b, c, color)
+            triangle(a, c, d, color)
+        }
+        func segment(_ a: SIMD2<Double>, _ b: SIMD2<Double>, width: Double, _ color: SIMD4<Float>) {
+            let length = Geometry.length(b - a)
+            guard length > 0 else { return }
+            // Square caps extend each segment by half the width, which also fills the corners.
+            let along = (b - a) / length * (width / 2)
+            let across = SIMD2(-along.y, along.x)
+            quad(a - along + across, b + along + across, b + along - across, a - along - across, color)
+        }
+
+        let selectedEdge = SIMD4<Float>(0.2, 0.8, 1, 1)
+        let edgeWidth = max(layer.edgeWidth, 1 / zoom)
+        var items = layer.visibleIndices(plane: leading).map { (layer.shapes[$0], layer.selection.contains($0)) }
+        if let draft = layer.draft { items.append((draft, false)) }
+
+        for (shape, selected) in items {
+            let outline = shape.outline
+            if shape.type.isClosed, layer.faceColor.a > 0 {
+                for (i, j, k) in Geometry.triangulate(outline) {
+                    triangle(outline[i], outline[j], outline[k], layer.faceColor.vector)
+                }
+            }
+            let color = selected ? selectedEdge : layer.edgeColor.vector
+            let segmentCount = shape.type.isClosed ? outline.count : outline.count - 1
+            for i in 0 ..< max(0, segmentCount) {
+                segment(outline[i], outline[(i + 1) % outline.count], width: edgeWidth, color)
+            }
+            if selected {
+                let half = 4 / zoom // 8-point handles
+                for v in shape.vertices {
+                    quad(v + SIMD2(-half, -half), v + SIMD2(half, -half), v + SIMD2(half, half), v + SIMD2(-half, half),
+                         SIMD4(1, 1, 1, 1))
+                }
+            }
+        }
+        return mesh
     }
 
     // MARK: 3D

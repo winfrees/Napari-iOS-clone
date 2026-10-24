@@ -43,11 +43,13 @@ struct LayerRow: View {
         case image
         case labels
         case points
+        case shapes
 
         init(_ layer: any Layer) {
             switch layer {
             case is LabelsLayer: self = .labels
             case is PointsLayer: self = .points
+            case is ShapesLayer: self = .shapes
             default: self = .image
             }
         }
@@ -57,6 +59,7 @@ struct LayerRow: View {
             case .image: return "photo"
             case .labels: return "square.dashed.inset.filled"
             case .points: return "circle.grid.2x2"
+            case .shapes: return "pentagon"
             }
         }
     }
@@ -92,6 +95,8 @@ struct LayerControls: View {
             LabelsControls(layer: labels, model: model)
         } else if let points = layer as? PointsLayer {
             PointsControls(layer: points, model: model)
+        } else if let shapes = layer as? ShapesLayer {
+            ShapesControls(layer: shapes, model: model)
         }
     }
 }
@@ -215,16 +220,7 @@ struct PointsControls: View {
     }
 
     private func color(_ keyPath: ReferenceWritableKeyPath<PointsLayer, RGBA>) -> Binding<Color> {
-        Binding(
-            get: {
-                let c = layer[keyPath: keyPath]
-                return Color(red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
-            },
-            set: { newValue in
-                let resolved = newValue.resolve(in: EnvironmentValues())
-                layer[keyPath: keyPath] = RGBA(resolved.red, resolved.green, resolved.blue, resolved.opacity)
-            }
-        )
+        colorBinding(layer, keyPath)
     }
 
     static func symbol(for mode: PointsMode) -> String {
@@ -232,6 +228,73 @@ struct PointsControls: View {
         case .panZoom: return "arrow.up.and.down.and.arrow.left.and.right"
         case .add: return "plus.circle"
         case .select: return "cursorarrow"
+        }
+    }
+}
+
+/// Bridges an `RGBA` property to a SwiftUI `ColorPicker`.
+func colorBinding<Root: AnyObject>(_ root: Root, _ keyPath: ReferenceWritableKeyPath<Root, RGBA>) -> Binding<Color> {
+    Binding(
+        get: {
+            let c = root[keyPath: keyPath]
+            return Color(red: Double(c.r), green: Double(c.g), blue: Double(c.b), opacity: Double(c.a))
+        },
+        set: { newValue in
+            let resolved = newValue.resolve(in: EnvironmentValues())
+            root[keyPath: keyPath] = RGBA(resolved.red, resolved.green, resolved.blue, resolved.opacity)
+        }
+    )
+}
+
+struct ShapesControls: View {
+    @Bindable var layer: ShapesLayer
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Picker("Mode", selection: $layer.mode) {
+            ForEach(ShapesMode.allCases) { mode in
+                Image(systemName: Self.symbol(for: mode))
+                    .accessibilityLabel(mode.rawValue)
+                    .tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        if layer.mode == .polygon {
+            Text(layer.draft == nil
+                 ? "Tap to place vertices; tap the first vertex to close."
+                 : "Tap the first vertex, or Finish, to close the polygon.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Finish polygon", systemImage: "checkmark.circle", action: layer.finishDraft)
+                .disabled(layer.draft == nil)
+                .buttonStyle(.borderless)
+        }
+        LabeledContent("Edge width") {
+            HStack {
+                Slider(value: $layer.edgeWidth, in: 0.5 ... 20)
+                Text(String(format: "%.1f", layer.edgeWidth))
+                    .monospacedDigit()
+                    .frame(width: 36, alignment: .trailing)
+            }
+        }
+        ColorPicker("Edge color", selection: colorBinding(layer, \.edgeColor))
+        ColorPicker("Face color", selection: colorBinding(layer, \.faceColor))
+        LabeledContent("Shapes", value: "\(layer.shapes.count)")
+        Toggle("Draw with Apple Pencil only", isOn: $model.pencilOnly)
+        Button("Delete selected", systemImage: "trash", role: .destructive, action: layer.removeSelected)
+            .disabled(layer.selection.isEmpty)
+            .buttonStyle(.borderless)
+    }
+
+    static func symbol(for mode: ShapesMode) -> String {
+        switch mode {
+        case .panZoom: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .select: return "cursorarrow"
+        case .rectangle: return "rectangle"
+        case .ellipse: return "oval"
+        case .polygon: return "pentagon"
+        case .line: return "line.diagonal"
+        case .path: return "scribble"
         }
     }
 }

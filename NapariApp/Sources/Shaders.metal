@@ -191,3 +191,32 @@ fragment float4 points_fragment(PointOut in [[stage_in]], constant LayerUniforms
     float alpha = color.a * coverage * u.opacity;
     return float4(color.rgb * alpha, alpha);
 }
+
+// MARK: - Shapes
+
+// Must match `ShapeVertex` in Renderer.swift. Fills, edges and handles are all
+// pre-built triangles in data coordinates.
+struct ShapeVertex {
+    float2 position;
+    float4 color;
+};
+
+struct ShapeOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+vertex ShapeOut shapes_vertex(uint vid [[vertex_id]],
+                              constant LayerUniforms &u [[buffer(0)]],
+                              const device ShapeVertex *vertices [[buffer(1)]]) {
+    ShapeVertex v = vertices[vid];
+    ShapeOut out;
+    out.position = float4(v.position * u.scale + u.offset, 0.0, 1.0);
+    out.color = v.color;
+    return out;
+}
+
+fragment float4 shapes_fragment(ShapeOut in [[stage_in]], constant LayerUniforms &u [[buffer(0)]]) {
+    float alpha = in.color.a * u.opacity;
+    return float4(in.color.rgb * alpha, alpha);
+}

@@ -70,6 +70,7 @@ struct ContentView: View {
                 Button("Open Image…", systemImage: "photo") { model.importTarget = .image }
                 Button("Open Labels…", systemImage: "square.dashed") { model.importTarget = .labels }
                 Button("Open Points CSV…", systemImage: "circle.grid.2x2") { model.importTarget = .points }
+                Button("Open Shapes CSV…", systemImage: "pentagon") { model.importTarget = .shapes }
                 Divider()
                 Button("Sample: Blobs", systemImage: "circle.hexagongrid") { model.loadSampleBlobs() }
                 Divider()
@@ -83,6 +84,7 @@ struct ContentView: View {
             Menu {
                 Button("New Labels Layer", systemImage: "square.dashed") { model.addEmptyLabels() }
                 Button("New Points Layer", systemImage: "circle.grid.2x2") { model.addEmptyPoints() }
+                Button("New Shapes Layer", systemImage: "pentagon") { model.addEmptyShapes() }
             } label: {
                 Label("New Layer", systemImage: "plus.square.on.square")
             }

@@ -16,8 +16,8 @@ struct CanvasView: UIViewRepresentable {
 /// Handles input on the canvas:
 /// - one finger (or a trackpad) pans, pinch zooms, scrolling zooms;
 /// - in 3D, one finger orbits and two fingers pan;
-/// - with a labels layer in a painting mode, or a points layer in add or select mode, the
-///   Pencil (and fingers, unless "Pencil only" is on) edits, and panning takes two fingers;
+/// - with a labels, points or shapes layer in an editing mode, the Pencil (and fingers,
+///   unless "Pencil only" is on) edits, and panning takes two fingers;
 /// - double-tapping the Pencil switches between paint and erase.
 final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     private let model: AppModel
@@ -30,18 +30,23 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
     private enum Editor {
         case labels(LabelsLayer)
         case points(PointsLayer)
+        case shapes(ShapesLayer)
     }
 
     private enum Drag {
         case stroke(LabelsLayer)
         /// `added` is true when this touch created the point, so a cancelled touch removes it.
         case point(PointsLayer, index: Int, added: Bool)
+        case shapeDraft(ShapesLayer)
+        /// `last` is the previous touch location, so the shape follows the finger.
+        case shapeMove(ShapesLayer, index: Int, last: SIMD2<Double>)
     }
 
     init(model: AppModel) {
         self.model = model
         super.init(frame: .zero, device: MTLCreateSystemDefaultDevice())
         colorPixelFormat = .bgra8Unorm
+        sampleCount = 4 // MSAA, for smooth shape edges
         clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         // TODO: draw on demand (when the model changes) instead of continuously.
         preferredFramesPerSecond = 60
@@ -98,6 +103,9 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
         }
         if let points = layer as? PointsLayer, points.mode != .panZoom {
             return .points(points)
+        }
+        if let shapes = layer as? ShapesLayer, shapes.mode != .panZoom {
+            return .shapes(shapes)
         }
         return nil
     }
@@ -210,6 +218,22 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
             case .panZoom:
                 break
             }
+        case .shapes(let shapes):
+            let plane = model.viewer.dims.planeIndices(forLayerShape: shapes.shape)
+            let tolerance = 12 / model.viewer.camera.zoom
+            if shapes.mode == .select {
+                if let index = shapes.shapeIndex(at: point, plane: plane, tolerance: tolerance) {
+                    shapes.selection = [index]
+                    activeTouch = touch
+                    drag = .shapeMove(shapes, index: index, last: point)
+                } else {
+                    shapes.selection = []
+                }
+            } else {
+                shapes.beginDraft(at: point, plane: plane, closeDistance: tolerance)
+                activeTouch = touch
+                drag = .shapeDraft(shapes)
+            }
         }
     }
 
@@ -228,14 +252,22 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
         case .point(let points, let index, _):
             let plane = model.viewer.dims.planeIndices(forLayerShape: points.shape)
             points.move(index, to: plane.map { Double($0) } + [location.y, location.x])
+        case .shapeDraft(let shapes):
+            // Paths sample every couple of screen points, regardless of zoom.
+            shapes.updateDraft(to: location, minimumSpacing: 2 / model.viewer.camera.zoom)
+        case .shapeMove(let shapes, let index, let last):
+            shapes.move(index, by: location - last)
+            self.drag = .shapeMove(shapes, index: index, last: location)
         }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
         guard let touch = activeTouch, touches.contains(touch) else { return }
-        if let drag, case .stroke(let labels) = drag {
-            labels.endStroke()
+        switch drag {
+        case .stroke(let labels)?: labels.endStroke()
+        case .shapeDraft(let shapes)?: shapes.endDrag()
+        default: break
         }
         activeTouch = nil
         drag = nil
@@ -251,7 +283,9 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
         case .point(let points, let index, let added) where added:
             points.selection = [index]
             points.removeSelected()
-        case .point:
+        case .shapeDraft(let shapes):
+            shapes.cancelDraftTouch()
+        case .point, .shapeMove:
             break
         }
         activeTouch = nil

@@ -261,6 +261,95 @@ final class PointsLayerTests: XCTestCase {
     }
 }
 
+final class ShapesLayerTests: XCTestCase {
+    func testTriangulationCoversConcavePolygon() {
+        // An L shape: concave, area 3.
+        let l: [SIMD2<Double>] = [[0, 0], [2, 0], [2, 1], [1, 1], [1, 2], [0, 2]]
+        for polygon in [l, l.reversed()] {
+            let triangles = Geometry.triangulate(polygon)
+            XCTAssertEqual(triangles.count, 4)
+            let area = triangles.reduce(0.0) { sum, t in
+                sum + abs(Geometry.signedArea([polygon[t.0], polygon[t.1], polygon[t.2]]))
+            }
+            XCTAssertEqual(area, 3, accuracy: 1e-9)
+        }
+    }
+
+    func testHitTesting() {
+        let square = VectorShape(type: .rectangle, vertices: [[0, 0], [10, 0], [10, 10], [0, 10]])
+        XCTAssertTrue(square.contains(SIMD2(5, 5), tolerance: 0))
+        XCTAssertFalse(square.contains(SIMD2(12, 5), tolerance: 1))
+        XCTAssertTrue(square.contains(SIMD2(11, 5), tolerance: 1.5))
+        let line = VectorShape(type: .line, vertices: [[0, 0], [10, 10]])
+        XCTAssertTrue(line.contains(SIMD2(5, 5.5), tolerance: 1))
+        XCTAssertFalse(line.contains(SIMD2(5, 8), tolerance: 1))
+        let ellipse = VectorShape(type: .ellipse, vertices: [[0, 0], [20, 0], [20, 10], [0, 10]])
+        XCTAssertEqual(ellipse.outline.count, 64)
+        XCTAssertTrue(ellipse.contains(SIMD2(10, 5), tolerance: 0))
+        XCTAssertFalse(ellipse.contains(SIMD2(1, 1), tolerance: 0), "bounding-box corner is outside the ellipse")
+    }
+
+    func testDrawingRectangleAndPolygon() {
+        let layer = ShapesLayer(extent: [4, 50, 50], name: "Shapes")
+        layer.mode = .rectangle
+        layer.beginDraft(at: SIMD2(5, 5), plane: [2], closeDistance: 1)
+        layer.updateDraft(to: SIMD2(15, 10), minimumSpacing: 1)
+        layer.endDrag()
+        XCTAssertEqual(layer.shapes.count, 1)
+        XCTAssertEqual(layer.shapes[0].vertices, [[5, 5], [15, 5], [15, 10], [5, 10]])
+        XCTAssertEqual(layer.shapes[0].leading, [2])
+        XCTAssertEqual(layer.visibleIndices(plane: [2]), [0])
+        XCTAssertEqual(layer.visibleIndices(plane: [1]), [])
+
+        layer.mode = .polygon
+        for p: SIMD2<Double> in [[0, 0], [10, 0], [10, 10]] {
+            layer.beginDraft(at: p, plane: [0], closeDistance: 1)
+            layer.endDrag()
+        }
+        XCTAssertNotNil(layer.draft, "polygons stay open until closed")
+        layer.beginDraft(at: SIMD2(20, 20), plane: [0], closeDistance: 1)
+        layer.cancelDraftTouch() // a vertex whose touch became a pan
+        XCTAssertEqual(layer.draft?.vertices.count, 3)
+        layer.beginDraft(at: SIMD2(0.5, 0.5), plane: [0], closeDistance: 1) // tap near the first vertex
+        XCTAssertNil(layer.draft)
+        XCTAssertEqual(layer.shapes.last?.vertices.count, 3)
+
+        // A click without a drag makes no rectangle.
+        layer.mode = .rectangle
+        layer.beginDraft(at: SIMD2(1, 1), plane: [0], closeDistance: 1)
+        layer.endDrag()
+        XCTAssertEqual(layer.shapes.count, 2)
+    }
+
+    func testPathSpacingAndMove() {
+        let layer = ShapesLayer(extent: [50, 50], name: "Shapes")
+        layer.mode = .path
+        layer.beginDraft(at: SIMD2(0, 0), plane: [], closeDistance: 1)
+        for x in stride(from: 0.5, through: 10, by: 0.5) {
+            layer.updateDraft(to: SIMD2(x, 0), minimumSpacing: 2)
+        }
+        layer.endDrag()
+        XCTAssertEqual(layer.shapes[0].vertices.count, 6) // 0, 2, 4, 6, 8, 10
+        layer.move(0, by: SIMD2(1, 1))
+        XCTAssertEqual(layer.shapes[0].vertices.first, SIMD2(1, 1))
+        XCTAssertEqual(layer.shapeIndex(at: SIMD2(5, 1), plane: [], tolerance: 0.5), 0)
+        layer.selection = [0]
+        layer.removeSelected()
+        XCTAssertTrue(layer.shapes.isEmpty)
+    }
+
+    func testCSVRoundTrip() throws {
+        let layer = ShapesLayer(extent: [3, 50, 50], shapes: [
+            VectorShape(type: .rectangle, vertices: [[1, 2], [5, 2], [5, 6], [1, 6]], leading: [1]),
+            VectorShape(type: .path, vertices: [[0, 0], [3, 4], [6, 0]], leading: [2]),
+        ], name: "Shapes")
+        let csv = layer.csv()
+        XCTAssertTrue(csv.hasPrefix("index,shape-type,vertex-index,axis-0,axis-1,axis-2\n0,rectangle,0,1.0,2.0,1.0\n"))
+        XCTAssertEqual(try ShapesLayer.parseCSV(csv), layer.shapes)
+        XCTAssertThrowsError(try ShapesLayer.parseCSV("index,shape-type,vertex-index,axis-0,axis-1\n0,blob,0,1,2\n"))
+    }
+}
+
 final class TIFFTests: XCTestCase {
     func testRoundTripUInt32Labels() throws {
         let original = NDArray<UInt32>(shape: [3, 5, 7], storage: (0 ..< 105).map { UInt32($0 * 1000) })

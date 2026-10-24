@@ -10,9 +10,10 @@ final class AppModel {
         case image
         case labels
         case points
+        case shapes
 
         var contentTypes: [UTType] {
-            self == .points ? [.commaSeparatedText] : [.tiff]
+            self == .points || self == .shapes ? [.commaSeparatedText] : [.tiff]
         }
     }
 
@@ -41,6 +42,10 @@ final class AppModel {
         viewer.addEmptyPoints()
     }
 
+    func addEmptyShapes() {
+        viewer.addEmptyShapes()
+    }
+
     func toggle3D() {
         viewer.dims.setNDisplay(viewer.dims.ndisplay == 3 ? 2 : 3)
         status = viewer.dims.ndisplay == 3 ? "3D: drag to rotate, two fingers to pan" : ""
@@ -48,8 +53,8 @@ final class AppModel {
     }
 
     func open(_ urls: [URL], as target: ImportTarget) {
-        if target == .points {
-            urls.forEach(openPoints)
+        if target == .points || target == .shapes {
+            for url in urls { openCSV(url, as: target) }
             return
         }
         isLoading = true
@@ -78,9 +83,10 @@ final class AppModel {
 
     var canExportSelectedLayer: Bool {
         viewer.selectedLayer is LabelsLayer || viewer.selectedLayer is PointsLayer
+            || viewer.selectedLayer is ShapesLayer
     }
 
-    /// Labels export as a TIFF, points as a napari-style CSV.
+    /// Labels export as a TIFF, points and shapes as napari-style CSVs.
     func exportSelectedLayer() {
         if let labels = viewer.selectedLayer as? LabelsLayer {
             exportDocument = ExportDocument(data: TIFFWriter.data(for: labels.data), filename: labels.name,
@@ -88,29 +94,38 @@ final class AppModel {
         } else if let points = viewer.selectedLayer as? PointsLayer {
             exportDocument = ExportDocument(data: Data(points.csv().utf8), filename: points.name,
                                             contentType: .commaSeparatedText)
+        } else if let shapes = viewer.selectedLayer as? ShapesLayer {
+            exportDocument = ExportDocument(data: Data(shapes.csv().utf8), filename: shapes.name,
+                                            contentType: .commaSeparatedText)
         }
     }
 
-    private func openPoints(_ url: URL) {
+    /// Reads a napari points or shapes CSV into a new layer.
+    private func openCSV(_ url: URL, as target: ImportTarget) {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        let name = url.deletingPathExtension().lastPathComponent
         do {
-            let coordinates = try PointsLayer.parseCSV(String(contentsOf: url, encoding: .utf8))
+            let text = try String(contentsOf: url, encoding: .utf8)
+            // Every coordinate, in (…, y, x) order, to size the layer.
+            let coordinates: [[Double]]
+            var shapes: [VectorShape] = []
+            if target == .shapes {
+                shapes = try ShapesLayer.parseCSV(text)
+                coordinates = shapes.flatMap { shape in shape.vertices.map { shape.leading + [$0.y, $0.x] } }
+            } else {
+                coordinates = try PointsLayer.parseCSV(text)
+            }
             guard let ndim = coordinates.first?.count else {
-                errorMessage = "\(url.lastPathComponent) contains no points."
+                errorMessage = "\(url.lastPathComponent) contains no data."
                 return
             }
-            // Span the layer being annotated when the dimensions match, else the points themselves.
-            let extent: [Int]
-            if let reference = viewer.selectedLayer ?? viewer.layers.first, reference.ndim == ndim {
-                extent = reference.shape
+            let extent = layerExtent(ndim: ndim, coordinates: coordinates)
+            if target == .shapes {
+                add { $0.add(ShapesLayer(extent: extent, shapes: shapes, name: name)) }
             } else {
-                extent = (0 ..< ndim).map { axis in
-                    max(1, Int((coordinates.map { $0[axis] }.max() ?? 0).rounded(.up)) + 1)
-                }
+                add { $0.add(PointsLayer(extent: extent, points: coordinates, name: name)) }
             }
-            let name = url.deletingPathExtension().lastPathComponent
-            add { $0.add(PointsLayer(extent: extent, points: coordinates, name: name)) }
         } catch {
             errorMessage = "Could not open \(url.lastPathComponent): \(error.localizedDescription)"
         }
@@ -138,6 +153,17 @@ final class AppModel {
             }
         }
         status = text
+    }
+
+    /// The extent for imported annotations: the layer being annotated when the dimensions
+    /// match, else just large enough for the coordinates.
+    private func layerExtent(ndim: Int, coordinates: [[Double]]) -> [Int] {
+        if let reference = viewer.selectedLayer ?? viewer.layers.first, reference.ndim == ndim {
+            return reference.shape
+        }
+        return (0 ..< ndim).map { axis in
+            max(1, Int((coordinates.map { $0[axis] }.max() ?? 0).rounded(.up)) + 1)
+        }
     }
 
     private static func labelValue(_ value: Float) -> UInt32 {
