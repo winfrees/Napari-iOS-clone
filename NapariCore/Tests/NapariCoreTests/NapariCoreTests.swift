@@ -167,7 +167,7 @@ final class TIFFTests: XCTestCase {
         let original = NDArray<UInt32>(shape: [3, 5, 7], storage: (0 ..< 105).map { UInt32($0 * 1000) })
         let read = try TIFFReader.read(TIFFWriter.data(for: original))
         XCTAssertEqual(read.shape, [3, 5, 7])
-        XCTAssertEqual(read.storage, original.storage.map(Float.init))
+        XCTAssertEqual(read.storage, original.storage.map { Float($0) })
     }
 
     func testRoundTripFloat4D() throws {
@@ -180,7 +180,7 @@ final class TIFFTests: XCTestCase {
         let original = NDArray<UInt16>(shape: [6, 9], storage: (0 ..< 54).map { UInt16($0 * 1200) })
         let read = try TIFFReader.read(TIFFWriter.data(for: original))
         XCTAssertEqual(read.shape, [6, 9])
-        XCTAssertEqual(read.storage, original.storage.map(Float.init))
+        XCTAssertEqual(read.storage, original.storage.map { Float($0) })
     }
 
     func testImageJHyperstackShape() {
