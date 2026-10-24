@@ -15,6 +15,7 @@ struct CanvasView: UIViewRepresentable {
 
 /// Handles input on the canvas:
 /// - one finger (or a trackpad) pans, pinch zooms, scrolling zooms;
+/// - in 3D, one finger orbits and two fingers pan;
 /// - with a labels layer in a painting mode, the Pencil (and fingers, unless "Pencil only"
 ///   is on) paints, fills or picks, and panning takes two fingers;
 /// - double-tapping the Pencil switches between paint and erase.
@@ -76,7 +77,8 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
 
     /// The labels layer that touches edit, if any.
     private var paintingLayer: LabelsLayer? {
-        guard let labels = model.viewer.selectedLayer as? LabelsLayer,
+        guard model.viewer.dims.ndisplay == 2,
+              let labels = model.viewer.selectedLayer as? LabelsLayer,
               labels.mode != .panZoom, labels.props.visible
         else { return nil }
         return labels
@@ -102,28 +104,43 @@ final class CanvasMTKView: MTKView, UIGestureRecognizerDelegate, UIPencilInterac
         true
     }
 
+    private var is3D: Bool { model.viewer.dims.ndisplay == 3 }
+
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         let translation = gesture.translation(in: self)
-        model.viewer.camera.pan(byScreenDelta: SIMD2(Double(translation.x), Double(translation.y)))
+        let delta = SIMD2(Double(translation.x), Double(translation.y))
+        let camera = model.viewer.camera
+        if !is3D {
+            camera.pan(byScreenDelta: delta)
+        } else if gesture.numberOfTouches >= 2 {
+            camera.pan3D += delta
+        } else {
+            camera.orbit(byScreenDelta: delta)
+        }
         gesture.setTranslation(.zero, in: self)
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-        let anchor = gesture.location(in: self)
-        model.viewer.camera.zoom(by: Double(gesture.scale), anchor: SIMD2(Double(anchor.x), Double(anchor.y)),
-                                 viewSize: viewSize)
+        zoom(by: Double(gesture.scale), anchor: gesture.location(in: self))
         gesture.scale = 1
     }
 
     @objc private func handleScroll(_ gesture: UIPanGestureRecognizer) {
-        let dy = Double(gesture.translation(in: self).y)
-        let anchor = gesture.location(in: self)
-        model.viewer.camera.zoom(by: exp(dy * 0.005), anchor: SIMD2(Double(anchor.x), Double(anchor.y)),
-                                 viewSize: viewSize)
+        zoom(by: exp(Double(gesture.translation(in: self).y) * 0.005), anchor: gesture.location(in: self))
         gesture.setTranslation(.zero, in: self)
     }
 
+    private func zoom(by factor: Double, anchor: CGPoint) {
+        let anchor = SIMD2(Double(anchor.x), Double(anchor.y))
+        if is3D {
+            model.viewer.camera.zoom3D(by: factor, anchor: anchor, viewSize: viewSize)
+        } else {
+            model.viewer.camera.zoom(by: factor, anchor: anchor, viewSize: viewSize)
+        }
+    }
+
     @objc private func handleHover(_ gesture: UIHoverGestureRecognizer) {
+        guard !is3D else { return }
         model.updateStatus(at: dataPoint(gesture.location(in: self)))
     }
 

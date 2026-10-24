@@ -10,6 +10,15 @@ final class NDArrayTests: XCTestCase {
         XCTAssertEqual(Array(array.plane(at: [1])), (12 ..< 24).map(Float.init))
         XCTAssertEqual(array.finiteRange(), 0 ... 23)
     }
+
+    func testVolumeSlices() {
+        let array = NDArray(shape: [2, 3, 4, 5], storage: (0 ..< 120).map(Float.init))
+        XCTAssertEqual(array.volumeShape?.depth, 3)
+        let volume = array.volume(at: [1])
+        XCTAssertEqual(volume.count, 60)
+        XCTAssertEqual(volume.first, 60)
+        XCTAssertNil(NDArray(shape: [4, 5], repeating: Float(0)).volumeShape)
+    }
 }
 
 final class DimsTests: XCTestCase {
@@ -28,6 +37,24 @@ final class DimsTests: XCTestCase {
         XCTAssertEqual(viewer.dims.point[1], 2)
         XCTAssertEqual(viewer.dims.planeIndices(forLayerShape: volume.shape), [2])
         XCTAssertEqual(viewer.dims.planeIndices(forLayerShape: image2D.shape), [])
+    }
+
+    func testThreeDimensionalDisplay() {
+        let viewer = Viewer()
+        viewer.addImage(NDArray(shape: [8, 8], repeating: 0))
+        viewer.dims.setNDisplay(3)
+        XCTAssertEqual(viewer.dims.ndisplay, 2, "3D needs at least three axes")
+
+        let timelapse = viewer.addImage(NDArray(shape: [4, 5, 8, 8], repeating: 0))
+        viewer.dims.setNDisplay(3)
+        XCTAssertEqual(viewer.dims.ndisplay, 3)
+        XCTAssertEqual(viewer.dims.sliderAxes, [0], "only time gets a slider in 3D")
+        viewer.dims.setPoint(axis: 0, to: 2)
+        XCTAssertEqual(viewer.dims.volumeIndices(forLayerShape: timelapse.shape), [2])
+        XCTAssertEqual(viewer.volumeExtent, SIMD3(8, 8, 5))
+
+        viewer.removeLayer(id: timelapse.id)
+        XCTAssertEqual(viewer.dims.ndisplay, 2, "back to 2D once no layer has three axes")
     }
 
     func testRemovingLayersShrinksDims() {
@@ -75,6 +102,33 @@ final class CameraTests: XCTestCase {
         XCTAssertEqual(before.y, after.y, accuracy: 1e-9)
         let roundTrip = camera.screenPoint(fromData: after, viewSize: view)
         XCTAssertEqual(roundTrip.x, anchor.x, accuracy: 1e-9)
+    }
+
+    func testOrbitAxesStayOrthonormal() {
+        let camera = Camera()
+        XCTAssertEqual(camera.axes.forward, SIMD3(0, 0, 1), "unrotated 3D looks down the stack like 2D")
+        camera.orbit(byScreenDelta: SIMD2(73, -41))
+        camera.orbit(byScreenDelta: SIMD2(0, -1000)) // clamps at the pole
+        XCTAssertEqual(camera.elevation, .pi / 2, accuracy: 1e-12)
+        let (right, down, forward) = camera.axes
+        for (a, b) in [(right, down), (down, forward), (right, forward)] {
+            XCTAssertEqual((a * b).sum(), 0, accuracy: 1e-12)
+        }
+        for axis in [right, down, forward] {
+            XCTAssertEqual((axis * axis).sum(), 1, accuracy: 1e-12)
+        }
+    }
+
+    func testZoom3DKeepsAnchorFixed() {
+        let camera = Camera()
+        let view = SIMD2<Double>(800, 600)
+        camera.fit3D(size: SIMD3(100, 100, 20), viewSize: view)
+        let anchor = SIMD2<Double>(500, 100)
+        let before = (anchor - view / 2 - camera.pan3D) / camera.zoom
+        camera.zoom3D(by: 3, anchor: anchor, viewSize: view)
+        let after = (anchor - view / 2 - camera.pan3D) / camera.zoom
+        XCTAssertEqual(before.x, after.x, accuracy: 1e-9)
+        XCTAssertEqual(before.y, after.y, accuracy: 1e-9)
     }
 }
 

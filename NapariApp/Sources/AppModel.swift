@@ -31,6 +31,12 @@ final class AppModel {
         viewer.addEmptyLabels()
     }
 
+    func toggle3D() {
+        viewer.dims.setNDisplay(viewer.dims.ndisplay == 3 ? 2 : 3)
+        status = viewer.dims.ndisplay == 3 ? "3D: drag to rotate, two fingers to pan" : ""
+        needsResetView = true
+    }
+
     func open(_ urls: [URL], as target: ImportTarget) {
         isLoading = true
         Task { @MainActor [self] in

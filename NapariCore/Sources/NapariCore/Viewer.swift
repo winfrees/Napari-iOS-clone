@@ -28,6 +28,17 @@ public final class Viewer {
         return (height, width)
     }
 
+    /// Width, height and depth (x, y, z) covered by all layers with at least three axes.
+    public var volumeExtent: SIMD3<Double> {
+        var extent = SIMD3<Double>(0, 0, 0)
+        for layer in layers where layer.ndim >= 3 {
+            let shape = layer.shape
+            extent = pointwiseMax(extent, SIMD3(Double(shape[shape.count - 1]), Double(shape[shape.count - 2]),
+                                                Double(shape[shape.count - 3])))
+        }
+        return extent
+    }
+
     // MARK: Adding and removing layers
 
     @discardableResult

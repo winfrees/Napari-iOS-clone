@@ -18,6 +18,9 @@ Early scaffold. Working so far:
 - **Labels:** paint, erase, flood fill and pick with Apple Pencil or finger, with undo and
   redo. Double-tap the Pencil to switch between paint and erase. Turn on "Paint with Apple
   Pencil only" to keep fingers for panning.
+- **3D:** volumes ray-cast on the GPU with maximum (MIP), minimum or average intensity
+  projection, using the layer's colormap and contrast. Drag to rotate, two fingers to pan,
+  pinch to zoom. Extra axes such as time keep their sliders.
 - **Navigation:** one-finger pan, pinch zoom, trackpad scroll zoom, and a status bar
   showing the coordinates and value under the pointer.
 - **Files:** grayscale TIFF stacks (uncompressed or PackBits; 8/16/32-bit integer or float;
@@ -25,7 +28,7 @@ Early scaffold. Working so far:
   `tifffile`/napari read back with the original shape.
 - **Sample data:** a synthetic blobs volume.
 
-Not yet: 3D volume rendering, Points and Shapes layers, OME-Zarr, compressed or RGB TIFFs,
+Not yet: labels in 3D, voxel scale (anisotropic z), Points and Shapes layers, OME-Zarr, compressed or RGB TIFFs,
 layer scale/translate, multiscale or tiled display of very large planes, and Python scripting.
 
 ## Layout
@@ -73,6 +76,9 @@ cd NapariCore && swift test
 - **Data** is stored as `NDArray<Float>` for images and `NDArray<UInt32>` for labels, in
   row-major order. The last two axes are always the displayed plane, so each slice is a
   contiguous run of memory that is uploaded to the GPU as-is.
+- **3D rendering** uploads each volume as a 16-bit normalised 3D texture (filterable on
+  every iOS GPU) and casts one orthographic ray per pixel through a full-screen quad,
+  about one sample per voxel.
 - **Rendering** draws one quad per visible layer, bottom to top. Each layer's current plane
   lives in a texture that is re-uploaded only when the slice or the data changes. Colormaps
   are 256-entry lookup textures. Shaders output premultiplied alpha, and each blending mode

@@ -86,6 +86,13 @@ struct ContentView: View {
 
     @ToolbarContentBuilder private var canvasToolbar: some ToolbarContent {
         ToolbarItem {
+            let is3D = model.viewer.dims.ndisplay == 3
+            Button(is3D ? "Switch to 2D" : "Switch to 3D", systemImage: is3D ? "square" : "cube") {
+                model.toggle3D()
+            }
+            .disabled(model.viewer.dims.ndim < 3)
+        }
+        ToolbarItem {
             Button("Reset View", systemImage: "house") { model.needsResetView = true }
         }
     }

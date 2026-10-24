@@ -120,6 +120,11 @@ struct ImageControls: View {
         Picker("Interpolation", selection: $layer.interpolation) {
             ForEach(Interpolation.allCases) { Text($0.rawValue).tag($0) }
         }
+        if layer.ndim >= 3 {
+            Picker("3D rendering", selection: $layer.rendering) {
+                ForEach(VolumeRendering.allCases) { Text($0.rawValue).tag($0) }
+            }
+        }
     }
 
     private var minimumGap: Float { (layer.dataRange.upperBound - layer.dataRange.lowerBound) / 1000 }
