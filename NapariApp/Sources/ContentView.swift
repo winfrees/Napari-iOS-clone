@@ -20,10 +20,20 @@ struct ContentView: View {
             .navigationTitle("napari")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { canvasToolbar }
+            .alert("Open OME-Zarr URL", isPresented: $model.isShowingURLPrompt) {
+                TextField("https://…/image.zarr", text: $model.urlText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                Button("Open") { model.openZarrURL() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The address of a public OME-Zarr image, for example from the Image Data Resource.")
+            }
         }
         .fileImporter(
             isPresented: Binding(get: { model.importTarget != nil }, set: { if !$0 { model.importTarget = nil } }),
-            allowedContentTypes: [.tiff],
+            allowedContentTypes: model.importTarget?.contentTypes ?? [.tiff],
             allowsMultipleSelection: true
         ) { result in
             let target = model.importTarget ?? .image
@@ -36,7 +46,7 @@ struct ContentView: View {
         .fileExporter(
             isPresented: Binding(get: { model.exportDocument != nil }, set: { if !$0 { model.exportDocument = nil } }),
             document: model.exportDocument,
-            contentType: .tiff,
+            contentType: model.exportDocument?.contentType ?? .tiff,
             defaultFilename: model.exportDocument?.filename
         ) { result in
             if case .failure(let error) = result { model.errorMessage = error.localizedDescription }
@@ -69,22 +79,40 @@ struct ContentView: View {
             Menu {
                 Button("Open Image…", systemImage: "photo") { model.importTarget = .image }
                 Button("Open Labels…", systemImage: "square.dashed") { model.importTarget = .labels }
+                Button("Open Points CSV…", systemImage: "circle.grid.2x2") { model.importTarget = .points }
+                Button("Open Shapes CSV…", systemImage: "pentagon") { model.importTarget = .shapes }
+                Divider()
+                Button("Open OME-Zarr Folder…", systemImage: "folder") { model.importTarget = .zarr }
+                Button("Open OME-Zarr URL…", systemImage: "network") { model.isShowingURLPrompt = true }
                 Divider()
                 Button("Sample: Blobs", systemImage: "circle.hexagongrid") { model.loadSampleBlobs() }
                 Divider()
-                Button("Export Labels…", systemImage: "square.and.arrow.up") { model.exportSelectedLabels() }
-                    .disabled(!(model.viewer.selectedLayer is LabelsLayer))
+                Button("Export Layer…", systemImage: "square.and.arrow.up") { model.exportSelectedLayer() }
+                    .disabled(!model.canExportSelectedLayer)
             } label: {
                 Label("File", systemImage: "folder")
             }
         }
         ToolbarItem {
-            Button("New Labels Layer", systemImage: "plus.square.dashed") { model.addEmptyLabels() }
-                .disabled(model.viewer.layers.isEmpty)
+            Menu {
+                Button("New Labels Layer", systemImage: "square.dashed") { model.addEmptyLabels() }
+                Button("New Points Layer", systemImage: "circle.grid.2x2") { model.addEmptyPoints() }
+                Button("New Shapes Layer", systemImage: "pentagon") { model.addEmptyShapes() }
+            } label: {
+                Label("New Layer", systemImage: "plus.square.on.square")
+            }
+            .disabled(model.viewer.layers.isEmpty)
         }
     }
 
     @ToolbarContentBuilder private var canvasToolbar: some ToolbarContent {
+        ToolbarItem {
+            let is3D = model.viewer.dims.ndisplay == 3
+            Button(is3D ? "Switch to 2D" : "Switch to 3D", systemImage: is3D ? "square" : "cube") {
+                model.toggle3D()
+            }
+            .disabled(model.viewer.dims.ndim < 3)
+        }
         ToolbarItem {
             Button("Reset View", systemImage: "house") { model.needsResetView = true }
         }

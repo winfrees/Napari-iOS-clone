@@ -10,6 +10,15 @@ final class NDArrayTests: XCTestCase {
         XCTAssertEqual(Array(array.plane(at: [1])), (12 ..< 24).map(Float.init))
         XCTAssertEqual(array.finiteRange(), 0 ... 23)
     }
+
+    func testVolumeSlices() {
+        let array = NDArray(shape: [2, 3, 4, 5], storage: (0 ..< 120).map(Float.init))
+        XCTAssertEqual(array.volumeShape?.depth, 3)
+        let volume = array.volume(at: [1])
+        XCTAssertEqual(volume.count, 60)
+        XCTAssertEqual(volume.first, 60)
+        XCTAssertNil(NDArray(shape: [4, 5], repeating: Float(0)).volumeShape)
+    }
 }
 
 final class DimsTests: XCTestCase {
@@ -28,6 +37,24 @@ final class DimsTests: XCTestCase {
         XCTAssertEqual(viewer.dims.point[1], 2)
         XCTAssertEqual(viewer.dims.planeIndices(forLayerShape: volume.shape), [2])
         XCTAssertEqual(viewer.dims.planeIndices(forLayerShape: image2D.shape), [])
+    }
+
+    func testThreeDimensionalDisplay() {
+        let viewer = Viewer()
+        viewer.addImage(NDArray(shape: [8, 8], repeating: 0))
+        viewer.dims.setNDisplay(3)
+        XCTAssertEqual(viewer.dims.ndisplay, 2, "3D needs at least three axes")
+
+        let timelapse = viewer.addImage(NDArray(shape: [4, 5, 8, 8], repeating: 0))
+        viewer.dims.setNDisplay(3)
+        XCTAssertEqual(viewer.dims.ndisplay, 3)
+        XCTAssertEqual(viewer.dims.sliderAxes, [0], "only time gets a slider in 3D")
+        viewer.dims.setPoint(axis: 0, to: 2)
+        XCTAssertEqual(viewer.dims.volumeIndices(forLayerShape: timelapse.shape), [2])
+        XCTAssertEqual(viewer.volumeExtent, SIMD3(8, 8, 5))
+
+        viewer.removeLayer(id: timelapse.id)
+        XCTAssertEqual(viewer.dims.ndisplay, 2, "back to 2D once no layer has three axes")
     }
 
     func testRemovingLayersShrinksDims() {
@@ -75,6 +102,33 @@ final class CameraTests: XCTestCase {
         XCTAssertEqual(before.y, after.y, accuracy: 1e-9)
         let roundTrip = camera.screenPoint(fromData: after, viewSize: view)
         XCTAssertEqual(roundTrip.x, anchor.x, accuracy: 1e-9)
+    }
+
+    func testOrbitAxesStayOrthonormal() {
+        let camera = Camera()
+        XCTAssertEqual(camera.axes.forward, SIMD3(0, 0, 1), "unrotated 3D looks down the stack like 2D")
+        camera.orbit(byScreenDelta: SIMD2(73, -41))
+        camera.orbit(byScreenDelta: SIMD2(0, -1000)) // clamps at the pole
+        XCTAssertEqual(camera.elevation, .pi / 2, accuracy: 1e-12)
+        let (right, down, forward) = camera.axes
+        for (a, b) in [(right, down), (down, forward), (right, forward)] {
+            XCTAssertEqual((a * b).sum(), 0, accuracy: 1e-12)
+        }
+        for axis in [right, down, forward] {
+            XCTAssertEqual((axis * axis).sum(), 1, accuracy: 1e-12)
+        }
+    }
+
+    func testZoom3DKeepsAnchorFixed() {
+        let camera = Camera()
+        let view = SIMD2<Double>(800, 600)
+        camera.fit3D(size: SIMD3(100, 100, 20), viewSize: view)
+        let anchor = SIMD2<Double>(500, 100)
+        let before = (anchor - view / 2 - camera.pan3D) / camera.zoom
+        camera.zoom3D(by: 3, anchor: anchor, viewSize: view)
+        let after = (anchor - view / 2 - camera.pan3D) / camera.zoom
+        XCTAssertEqual(before.x, after.x, accuracy: 1e-9)
+        XCTAssertEqual(before.y, after.y, accuracy: 1e-9)
     }
 }
 
@@ -162,12 +216,146 @@ final class LabelsLayerTests: XCTestCase {
     }
 }
 
+final class PointsLayerTests: XCTestCase {
+    func testSlicingAndHitTesting() {
+        let points = PointsLayer(extent: [10, 50, 50], points: [[2, 10, 10], [2.4, 30, 30], [5, 10, 10]], name: "Points")
+        XCTAssertEqual(points.visibleIndices(plane: [2]), [0, 1])
+        XCTAssertEqual(points.visibleIndices(plane: [5]), [2])
+        // (x, y) = (11, 12) is near point 0, which is visible on plane 2 only.
+        XCTAssertEqual(points.nearestVisible(to: SIMD2(11, 12), plane: [2], within: 5), 0)
+        XCTAssertNil(points.nearestVisible(to: SIMD2(11, 12), plane: [2], within: 1))
+        XCTAssertEqual(points.nearestVisible(to: SIMD2(11, 12), plane: [5], within: 5), 2)
+    }
+
+    func testEditing() {
+        let points = PointsLayer(extent: [50, 50], name: "Points")
+        let a = points.add([1, 2])
+        let b = points.add([3, 4])
+        points.add([5, 6])
+        points.move(b, to: [7, 8])
+        XCTAssertEqual(points.points[b], [7, 8])
+        points.selection = [a, b]
+        points.removeSelected()
+        XCTAssertEqual(points.points, [[5, 6]])
+        XCTAssertTrue(points.selection.isEmpty)
+    }
+
+    func testCSVRoundTrip() throws {
+        let points = PointsLayer(extent: [10, 50, 50], points: [[2, 10.5, 10], [3, 30, 30.25]], name: "Points")
+        let csv = points.csv()
+        XCTAssertTrue(csv.hasPrefix("index,axis-0,axis-1,axis-2\n0,2.0,10.5,10.0\n"))
+        XCTAssertEqual(try PointsLayer.parseCSV(csv), points.points)
+        // Extra columns and column order from other tools are tolerated.
+        XCTAssertEqual(try PointsLayer.parseCSV("axis-1,label,axis-0\n4,cell,3\n"), [[3, 4]])
+        XCTAssertThrowsError(try PointsLayer.parseCSV("index,axis-0,axis-1\n0,1,x\n")) { error in
+            XCTAssertEqual(error as? PointsLayer.CSVError, .badValue(line: 2))
+        }
+    }
+
+    func testEmptyPointsMatchSelectedLayer() {
+        let viewer = Viewer()
+        viewer.addImage(NDArray(shape: [3, 8, 8], repeating: 0))
+        let points = viewer.addEmptyPoints()
+        XCTAssertEqual(points?.shape, [3, 8, 8])
+        XCTAssertEqual(viewer.dims.range, [3, 8, 8])
+    }
+}
+
+final class ShapesLayerTests: XCTestCase {
+    func testTriangulationCoversConcavePolygon() {
+        // An L shape: concave, area 3.
+        let l: [SIMD2<Double>] = [[0, 0], [2, 0], [2, 1], [1, 1], [1, 2], [0, 2]]
+        for polygon in [l, l.reversed()] {
+            let triangles = Geometry.triangulate(polygon)
+            XCTAssertEqual(triangles.count, 4)
+            let area = triangles.reduce(0.0) { sum, t in
+                sum + abs(Geometry.signedArea([polygon[t.0], polygon[t.1], polygon[t.2]]))
+            }
+            XCTAssertEqual(area, 3, accuracy: 1e-9)
+        }
+    }
+
+    func testHitTesting() {
+        let square = VectorShape(type: .rectangle, vertices: [[0, 0], [10, 0], [10, 10], [0, 10]])
+        XCTAssertTrue(square.contains(SIMD2(5, 5), tolerance: 0))
+        XCTAssertFalse(square.contains(SIMD2(12, 5), tolerance: 1))
+        XCTAssertTrue(square.contains(SIMD2(11, 5), tolerance: 1.5))
+        let line = VectorShape(type: .line, vertices: [[0, 0], [10, 10]])
+        XCTAssertTrue(line.contains(SIMD2(5, 5.5), tolerance: 1))
+        XCTAssertFalse(line.contains(SIMD2(5, 8), tolerance: 1))
+        let ellipse = VectorShape(type: .ellipse, vertices: [[0, 0], [20, 0], [20, 10], [0, 10]])
+        XCTAssertEqual(ellipse.outline.count, 64)
+        XCTAssertTrue(ellipse.contains(SIMD2(10, 5), tolerance: 0))
+        XCTAssertFalse(ellipse.contains(SIMD2(1, 1), tolerance: 0), "bounding-box corner is outside the ellipse")
+    }
+
+    func testDrawingRectangleAndPolygon() {
+        let layer = ShapesLayer(extent: [4, 50, 50], name: "Shapes")
+        layer.mode = .rectangle
+        layer.beginDraft(at: SIMD2(5, 5), plane: [2], closeDistance: 1)
+        layer.updateDraft(to: SIMD2(15, 10), minimumSpacing: 1)
+        layer.endDrag()
+        XCTAssertEqual(layer.shapes.count, 1)
+        XCTAssertEqual(layer.shapes[0].vertices, [[5, 5], [15, 5], [15, 10], [5, 10]])
+        XCTAssertEqual(layer.shapes[0].leading, [2])
+        XCTAssertEqual(layer.visibleIndices(plane: [2]), [0])
+        XCTAssertEqual(layer.visibleIndices(plane: [1]), [])
+
+        layer.mode = .polygon
+        for p: SIMD2<Double> in [[0, 0], [10, 0], [10, 10]] {
+            layer.beginDraft(at: p, plane: [0], closeDistance: 1)
+            layer.endDrag()
+        }
+        XCTAssertNotNil(layer.draft, "polygons stay open until closed")
+        layer.beginDraft(at: SIMD2(20, 20), plane: [0], closeDistance: 1)
+        layer.cancelDraftTouch() // a vertex whose touch became a pan
+        XCTAssertEqual(layer.draft?.vertices.count, 3)
+        layer.beginDraft(at: SIMD2(0.5, 0.5), plane: [0], closeDistance: 1) // tap near the first vertex
+        XCTAssertNil(layer.draft)
+        XCTAssertEqual(layer.shapes.last?.vertices.count, 3)
+
+        // A click without a drag makes no rectangle.
+        layer.mode = .rectangle
+        layer.beginDraft(at: SIMD2(1, 1), plane: [0], closeDistance: 1)
+        layer.endDrag()
+        XCTAssertEqual(layer.shapes.count, 2)
+    }
+
+    func testPathSpacingAndMove() {
+        let layer = ShapesLayer(extent: [50, 50], name: "Shapes")
+        layer.mode = .path
+        layer.beginDraft(at: SIMD2(0, 0), plane: [], closeDistance: 1)
+        for x in stride(from: 0.5, through: 10, by: 0.5) {
+            layer.updateDraft(to: SIMD2(x, 0), minimumSpacing: 2)
+        }
+        layer.endDrag()
+        XCTAssertEqual(layer.shapes[0].vertices.count, 6) // 0, 2, 4, 6, 8, 10
+        layer.move(0, by: SIMD2(1, 1))
+        XCTAssertEqual(layer.shapes[0].vertices.first, SIMD2(1, 1))
+        XCTAssertEqual(layer.shapeIndex(at: SIMD2(5, 1), plane: [], tolerance: 0.5), 0)
+        layer.selection = [0]
+        layer.removeSelected()
+        XCTAssertTrue(layer.shapes.isEmpty)
+    }
+
+    func testCSVRoundTrip() throws {
+        let layer = ShapesLayer(extent: [3, 50, 50], shapes: [
+            VectorShape(type: .rectangle, vertices: [[1, 2], [5, 2], [5, 6], [1, 6]], leading: [1]),
+            VectorShape(type: .path, vertices: [[0, 0], [3, 4], [6, 0]], leading: [2]),
+        ], name: "Shapes")
+        let csv = layer.csv()
+        XCTAssertTrue(csv.hasPrefix("index,shape-type,vertex-index,axis-0,axis-1,axis-2\n0,rectangle,0,1.0,2.0,1.0\n"))
+        XCTAssertEqual(try ShapesLayer.parseCSV(csv), layer.shapes)
+        XCTAssertThrowsError(try ShapesLayer.parseCSV("index,shape-type,vertex-index,axis-0,axis-1\n0,blob,0,1,2\n"))
+    }
+}
+
 final class TIFFTests: XCTestCase {
     func testRoundTripUInt32Labels() throws {
         let original = NDArray<UInt32>(shape: [3, 5, 7], storage: (0 ..< 105).map { UInt32($0 * 1000) })
         let read = try TIFFReader.read(TIFFWriter.data(for: original))
         XCTAssertEqual(read.shape, [3, 5, 7])
-        XCTAssertEqual(read.storage, original.storage.map(Float.init))
+        XCTAssertEqual(read.storage, original.storage.map { Float($0) })
     }
 
     func testRoundTripFloat4D() throws {
@@ -180,7 +368,7 @@ final class TIFFTests: XCTestCase {
         let original = NDArray<UInt16>(shape: [6, 9], storage: (0 ..< 54).map { UInt16($0 * 1200) })
         let read = try TIFFReader.read(TIFFWriter.data(for: original))
         XCTAssertEqual(read.shape, [6, 9])
-        XCTAssertEqual(read.storage, original.storage.map(Float.init))
+        XCTAssertEqual(read.storage, original.storage.map { Float($0) })
     }
 
     func testImageJHyperstackShape() {

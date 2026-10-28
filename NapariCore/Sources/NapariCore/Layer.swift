@@ -48,6 +48,18 @@ public enum Interpolation: String, CaseIterable, Identifiable, Sendable {
     public var id: String { rawValue }
 }
 
+/// How a volume is projected onto the screen in 3D.
+public enum VolumeRendering: String, CaseIterable, Identifiable, Sendable {
+    /// Maximum intensity along each ray.
+    case mip
+    /// Minimum intensity along each ray.
+    case minip
+    /// Mean intensity along each ray.
+    case average
+
+    public var id: String { rawValue }
+}
+
 /// A grayscale image or volume, shown through a colormap with adjustable contrast.
 @Observable
 public final class ImageLayer: Layer {
@@ -60,6 +72,7 @@ public final class ImageLayer: Layer {
     public let dataRange: ClosedRange<Float>
     public var gamma: Float = 1
     public var interpolation: Interpolation = .nearest
+    public var rendering: VolumeRendering = .mip
     public let dataVersion = 0
 
     public var shape: [Int] { data.shape }

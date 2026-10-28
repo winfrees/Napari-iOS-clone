@@ -70,6 +70,22 @@ public struct NDArray<Element> {
         return storage[start ..< start + planeCount]
     }
 
+    // MARK: Volumes (the last three axes)
+
+    /// Depth, height and width of the trailing three axes.
+    public var volumeShape: (depth: Int, height: Int, width: Int)? {
+        ndim >= 3 ? (shape[ndim - 3], shape[ndim - 2], shape[ndim - 1]) : nil
+    }
+
+    /// The (z, y, x) block selected by one index per axis before the last three.
+    public func volume(at leading: [Int]) -> ArraySlice<Element> {
+        precondition(ndim >= 3 && leading.count == ndim - 3,
+                     "expected \(ndim - 3) leading indices for shape \(shape)")
+        var start = 0
+        for (i, stride) in zip(leading, strides) { start += i * stride }
+        return storage[start ..< start + strides[ndim - 3] * shape[ndim - 3]]
+    }
+
     public func map<T>(_ transform: (Element) throws -> T) rethrows -> NDArray<T> {
         NDArray<T>(shape: shape, storage: try storage.map(transform))
     }

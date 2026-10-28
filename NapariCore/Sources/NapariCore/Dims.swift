@@ -12,13 +12,20 @@ public final class Dims {
     /// Current index along each axis. Entries for the displayed axes are unused.
     public private(set) var point: [Int] = [0, 0]
     public private(set) var axisLabels: [String] = ["0", "1"]
+    /// Number of displayed axes: 2 for a plane, 3 for a volume. Always the last axes.
+    public private(set) var ndisplay = 2
 
     public init() {}
 
-    /// Axes that get a slider: everything except the two displayed axes,
+    /// Axes that get a slider: everything except the displayed axes,
     /// skipping axes with a single step.
     public var sliderAxes: [Int] {
-        (0 ..< max(0, ndim - 2)).filter { range[$0] > 1 }
+        (0 ..< max(0, ndim - ndisplay)).filter { range[$0] > 1 }
+    }
+
+    /// 3D needs at least three axes; requests for it are ignored otherwise.
+    public func setNDisplay(_ value: Int) {
+        ndisplay = value == 3 && ndim >= 3 ? 3 : 2
     }
 
     public func update(range newRange: [Int]) {
@@ -34,6 +41,7 @@ public final class Dims {
         range = padded
         point = newPoint
         axisLabels = (0 ..< newNdim).map(String.init)
+        if ndim < 3 { ndisplay = 2 }
     }
 
     public func setPoint(axis: Int, to value: Int) {
@@ -43,8 +51,17 @@ public final class Dims {
 
     /// The leading indices selecting the visible plane of a layer with the given shape.
     public func planeIndices(forLayerShape shape: [Int]) -> [Int] {
+        leadingIndices(forLayerShape: shape, displayed: 2)
+    }
+
+    /// The leading indices selecting the visible volume of a layer with at least three axes.
+    public func volumeIndices(forLayerShape shape: [Int]) -> [Int] {
+        leadingIndices(forLayerShape: shape, displayed: 3)
+    }
+
+    private func leadingIndices(forLayerShape shape: [Int], displayed: Int) -> [Int] {
         let offset = ndim - shape.count
-        return (0 ..< max(0, shape.count - 2)).map { axis in
+        return (0 ..< max(0, shape.count - displayed)).map { axis in
             let viewerAxis = axis + offset
             let value = viewerAxis >= 0 && viewerAxis < point.count ? point[viewerAxis] : 0
             return min(max(value, 0), shape[axis] - 1)

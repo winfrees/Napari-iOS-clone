@@ -28,6 +28,17 @@ public final class Viewer {
         return (height, width)
     }
 
+    /// Width, height and depth (x, y, z) covered by all layers with at least three axes.
+    public var volumeExtent: SIMD3<Double> {
+        var extent = SIMD3<Double>(0, 0, 0)
+        for layer in layers where layer.ndim >= 3 {
+            let shape = layer.shape
+            extent = pointwiseMax(extent, SIMD3(Double(shape[shape.count - 1]), Double(shape[shape.count - 2]),
+                                                Double(shape[shape.count - 3])))
+        }
+        return extent
+    }
+
     // MARK: Adding and removing layers
 
     @discardableResult
@@ -77,6 +88,20 @@ public final class Viewer {
     public func addEmptyLabels(name: String = "Labels") -> LabelsLayer? {
         guard let reference = selectedLayer ?? layers.first else { return nil }
         return add(LabelsLayer(shape: reference.shape, name: name))
+    }
+
+    /// Adds an empty points layer spanning the selected (or first) layer.
+    @discardableResult
+    public func addEmptyPoints(name: String = "Points") -> PointsLayer? {
+        guard let reference = selectedLayer ?? layers.first else { return nil }
+        return add(PointsLayer(extent: reference.shape, name: name))
+    }
+
+    /// Adds an empty shapes layer spanning the selected (or first) layer.
+    @discardableResult
+    public func addEmptyShapes(name: String = "Shapes") -> ShapesLayer? {
+        guard let reference = selectedLayer ?? layers.first else { return nil }
+        return add(ShapesLayer(extent: reference.shape, name: name))
     }
 
     public func removeLayer(id: UUID) {
